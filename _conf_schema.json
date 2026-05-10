@@ -122,13 +122,19 @@
       "natural_confirm_enabled": {
         "description": "自然语言确认触发",
         "type": "bool",
-        "hint": "开启后，用户说“看看你”“拍张今天照片”“看看今天穿搭”等会先追问是否要看照片。",
+        "hint": "开启后，用户说“看看你”“拍张今天照片”“看看今天穿搭”等会记录待确认自拍意图。",
         "default": true
+      },
+      "natural_confirm_mode": {
+        "description": "自然语言确认模式",
+        "type": "string",
+        "hint": "passive=只记录意图并放行给主 Agent 自然回复；plugin=由插件直接发送确认句。",
+        "default": "passive"
       },
       "confirm_ttl_seconds": {
         "description": "自拍确认等待时间",
         "type": "int",
-        "hint": "追问“要看照片吗？”后，等待用户回复“要看”等确认词的时间。",
+        "hint": "记录待确认自拍意图后，等待用户回复“要看”等确认词的时间。",
         "default": 180
       },
       "image_field": {

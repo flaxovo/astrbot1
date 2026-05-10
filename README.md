@@ -39,8 +39,9 @@ AstrBot 图片生成插件。用户发送关键词和图片描述后，插件会
 | `selfie.model` | 自拍模型，默认 `gpt-image-2`。 |
 | `selfie.max_reference_images` | 最多提交参考图数量，默认 `2`。 |
 | `selfie.recent_image_ttl_seconds` | 先发图片再设置参考照时，最近图片缓存多久，默认 `600` 秒。 |
-| `selfie.natural_confirm_enabled` | 是否启用自然语言“先追问再生成”，默认开启。 |
-| `selfie.confirm_ttl_seconds` | 追问后等待用户确认的时间，默认 `180` 秒。 |
+| `selfie.natural_confirm_enabled` | 是否启用自然语言待确认意图，默认开启。 |
+| `selfie.natural_confirm_mode` | 自然语言确认模式，默认 `passive`：插件只记录意图并放行给主 Agent 自然回复；`plugin`：插件直接发送确认句。 |
+| `selfie.confirm_ttl_seconds` | 等待用户确认的时间，默认 `180` 秒。 |
 
 ## 自拍参考照
 
@@ -65,13 +66,13 @@ AstrBot 图片生成插件。用户发送关键词和图片描述后，插件会
 看看今天的穿搭
 ```
 
-插件会先回复“要看照片吗？”，用户在有效时间内回复 `要看`、`看看`、`来一张`、`好`、`OK` 等确认词后，再生成自拍图。
+默认 `selfie.natural_confirm_mode=passive` 时，插件会记录“用户可能想看照片/穿搭”的意图，然后放行给主 Agent，让它结合记忆和人设自然回复。用户在有效时间内回复 `要看`、`看看`、`来一张`、`好`、`OK` 等确认词后，插件再生成自拍图。
 
 ### LLM Tool
 
 插件提供 `gpt_img_2_generate` 给主 Agent 调用。主 Agent 可以结合当前聊天、记忆和用户偏好判断：
 
-- 用户只是含蓄地想看 Bot 照片或穿搭：调用 `mode=ask_selfie` 或 `ask_first=true`，先追问确认。
+- 用户只是含蓄地想看 Bot 照片或穿搭：可以直接自然追问；如果需要插件代发确认句，调用 `mode=ask_selfie` 或 `ask_first=true`。
 - 用户已经确认要看：调用 `mode=selfie`，直接生成自拍参考图。
 - 用户只是要画普通图片：调用 `mode=text`。
 

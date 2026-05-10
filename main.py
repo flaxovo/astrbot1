@@ -81,12 +81,12 @@ class GptImg2Plugin(Star):
 
         natural_selfie_prompt = self._build_natural_selfie_prompt(message)
         if natural_selfie_prompt:
-            event.stop_event()
-            self._pending_selfie_confirm[self._event_user_key(event)] = (
-                time.time(),
-                natural_selfie_prompt,
-            )
-            yield event.plain_result("要看照片吗？你回“要看”我就拍一张给你。")
+            self._set_pending_selfie(event, natural_selfie_prompt)
+            if self._should_plugin_send_natural_confirm():
+                event.stop_event()
+                yield event.plain_result(
+                    self._build_selfie_confirmation_message(natural_selfie_prompt)
+                )
             return
 
         if not self._matches_keyword(message):
@@ -126,6 +126,7 @@ class GptImg2Plugin(Star):
         - 用户说“让我看看你”“拍张今天照片”“看看今天穿搭”等，但还没有明确同意看照片：mode=ask_selfie，ask_first=true。
         - 用户已经回复“要看/看看/来一张/好/OK”等确认词：mode=selfie，ask_first=false。
         - 用户在聊 Bot 自己的照片、自拍、穿搭、今天怎么穿：优先使用 selfie，而不是普通文生图。
+        - 如果只是要自然地问用户是否想看，可以直接用你的人设和记忆自然回复；插件已记录待确认自拍意图，用户之后确认时会自动生成。
         - 成功后插件会直接把图片发送给用户，模型不要再伪造图片或描述成已经看过真实照片。
 
         Args:
@@ -139,11 +140,10 @@ class GptImg2Plugin(Star):
         if resolved_mode == "ask_selfie":
             event.stop_event()
             pending_prompt = prompt or self._default_selfie_prompt()
-            self._pending_selfie_confirm[self._event_user_key(event)] = (
-                time.time(),
-                pending_prompt,
+            self._set_pending_selfie(event, pending_prompt)
+            yield event.plain_result(
+                self._build_selfie_confirmation_message(pending_prompt)
             )
-            yield event.plain_result("要看照片吗？你回“要看”我就拍一张给你。")
             return
 
         if resolved_mode == "selfie":
@@ -517,6 +517,26 @@ class GptImg2Plugin(Star):
             sender_id,
         ]
         return "::".join(part for part in parts if part) or "default"
+
+    def _set_pending_selfie(self, event: AstrMessageEvent, prompt: str) -> None:
+        self._pending_selfie_confirm[self._event_user_key(event)] = (
+            time.time(),
+            prompt or self._default_selfie_prompt(),
+        )
+
+    def _should_plugin_send_natural_confirm(self) -> bool:
+        mode = self._get_selfie_str("natural_confirm_mode", "passive").lower()
+        return mode in {"plugin", "direct", "template"}
+
+    def _build_selfie_confirmation_message(self, prompt: str) -> str:
+        text = prompt.strip()
+        if any(marker in text for marker in ("穿搭", "ootd", "outfit")):
+            return "我可以按今天的感觉搭一身拍给你看。要看吗？"
+        if "今天" in text:
+            return "我可以拍一张今天状态的照片给你。要看吗？"
+        if any(marker in text for marker in ("自拍", "照片", "photo", "selfie")):
+            return "我可以拍一张给你看。要看吗？"
+        return "要不要我拍一张给你看？"
 
     def _resolve_pending_selfie(
         self, event: AstrMessageEvent, message: str
