@@ -174,7 +174,7 @@ class GptImg2Plugin(Star):
             image_ref = await self._generate_image(api_key, prompt)
         except Exception as exc:
             logger.exception("gpt-img-2 image generation failed")
-            yield event.plain_result(f"图片生成失败：{exc}")
+            yield event.plain_result(self._friendly_generation_error(exc, mode="image"))
             return
 
         yield event.image_result(image_ref)
@@ -195,7 +195,7 @@ class GptImg2Plugin(Star):
             image_ref = await self._generate_selfie(api_key, event, prompt)
         except Exception as exc:
             logger.exception("gpt-img-2 selfie generation failed")
-            yield event.plain_result(f"自拍生成失败：{exc}")
+            yield event.plain_result(self._friendly_generation_error(exc, mode="selfie"))
             return
 
         yield event.image_result(image_ref)
@@ -993,6 +993,34 @@ class GptImg2Plugin(Star):
             message = error.get("message") or error.get("code") or str(error)
             return f"接口返回 HTTP {status_code}: {message}"
         return f"接口返回 HTTP {status_code}: {body[:300]}"
+
+    def _friendly_generation_error(self, exc: Exception, *, mode: str) -> str:
+        text = str(exc)
+        lowered = text.lower()
+        is_selfie = mode == "selfie"
+
+        if any(marker in text for marker in ("违反", "政策", "敏感", "不允许", "违规")):
+            if is_selfie:
+                return "这张我拍得不太合适，先不给你看啦。下次换个感觉再拍给你。"
+            return "这张图的感觉不太合适，我换个说法再画会更稳一点。"
+
+        if "未设置自拍参考照" in text:
+            return "我还没准备好参考照呢。你先发一张想当参考的照片，再跟我说“自拍参考 设置”。"
+
+        if "api_key" in lowered or "authorization" in lowered or "401" in text:
+            return "我这边还没连好出图接口，等配置好钥匙再给你看。"
+
+        if "timeout" in lowered or "超时" in text:
+            return "刚刚拍得有点久，像是卡住了。等会儿我再给你补一张。"
+
+        if "HTTP 500" in text or "HTTP 502" in text or "HTTP 503" in text:
+            if is_selfie:
+                return "这次没拍出来，可能状态不太好。下次给你看吧。"
+            return "这次没画出来，接口那边有点不稳定。等下我再试试。"
+
+        if is_selfie:
+            return "这次照片没拍好，我先不发啦。下次给你看一张更好看的。"
+        return "这次图片没生成好，我换个方式再试会更稳。"
 
     async def terminate(self):
         pass
