@@ -1,0 +1,64 @@
+{
+  "api_key": {
+    "description": "API Key",
+    "type": "string",
+    "hint": "填写 api.xbyjs.top 的 API Key。也可以不填，改用环境变量 OPENAI_API_KEY。",
+    "obvious_hint": true,
+    "default": ""
+  },
+  "base_url": {
+    "description": "API Base URL",
+    "type": "string",
+    "hint": "默认使用 https://api.xbyjs.top。",
+    "default": "https://api.xbyjs.top"
+  },
+  "endpoint": {
+    "description": "图片生成接口路径",
+    "type": "string",
+    "hint": "api.xbyjs.top 的 OpenAI 兼容图片生成路径。",
+    "default": "/v1/images/generations"
+  },
+  "model": {
+    "description": "图片模型",
+    "type": "string",
+    "hint": "可选：gpt-image-2、gpt-image-2-2k、gpt-image-2-4k。",
+    "default": "gpt-image-2"
+  },
+  "size": {
+    "description": "图片尺寸",
+    "type": "string",
+    "hint": "常用值：1024x1024、1024x1536、1536x1024。具体支持范围取决于模型和服务商。",
+    "default": "1024x1024"
+  },
+  "quality": {
+    "description": "图片质量",
+    "type": "string",
+    "hint": "常用值：auto、low、medium、high。兼容服务不支持时可留空。",
+    "default": "auto"
+  },
+  "output_format": {
+    "description": "输出格式",
+    "type": "string",
+    "hint": "常用值：png、jpeg、webp。具体支持范围取决于模型和服务商。",
+    "default": "png"
+  },
+  "timeout": {
+    "description": "请求超时时间",
+    "type": "int",
+    "hint": "单位：秒。",
+    "default": 120
+  },
+  "keywords": {
+    "description": "免斜杠触发关键词",
+    "type": "list",
+    "hint": "用户可直接发送“画图 描述”触发。斜杠命令固定支持 /gptimg、/画图、/绘图、/生成图片、/gpt-img-2。",
+    "default": ["画图", "绘图", "生成图片", "gptimg", "gpt-img-2"]
+  },
+  "extra_body": {
+    "description": "额外请求体参数",
+    "type": "dict",
+    "hint": "用于兼容不同服务商的额外参数，会覆盖同名默认参数。",
+    "items": {},
+    "default": {}
+  }
+}
