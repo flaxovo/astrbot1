@@ -196,7 +196,12 @@ class GptImg2Plugin(Star):
                 return ""
             if rest[0].isspace() or rest[0] in ":：":
                 return self._strip_prompt_separator(rest)
+            if self._is_cjk_keyword(keyword):
+                return rest.strip()
         return None
+
+    def _is_cjk_keyword(self, keyword: str) -> bool:
+        return any("\u4e00" <= char <= "\u9fff" for char in keyword)
 
     def _strip_prompt_separator(self, value: str) -> str:
         value = value.strip()
