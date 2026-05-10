@@ -812,13 +812,25 @@ class GptImg2Plugin(Star):
     def _build_selfie_prompt(self, prompt: str, extra_refs: int) -> str:
         prefix = self._get_selfie_str("prompt_prefix", "")
         if not prefix:
+            identity_strength = self._get_selfie_str("identity_strength", "balanced")
             prefix = (
-                "请根据参考图生成一张新的自拍照：以第一张参考图的人脸身份和气质为准，"
-                "保持五官特征一致；如果有额外参考图，仅作为服装、姿势、构图或场景参考；"
+                "请生成一张全新的照片，而不是复刻参考图。\n"
+                f"身份参考强度：{identity_strength}。\n"
+                "第一张参考图只用于识别人脸身份、五官比例、脸型和整体气质；"
+                "不要沿用参考图的尺寸、构图、镜头距离、姿势、手势、衣服、背景、光线、色调或拍摄角度。\n"
+                "必须根据用户这次的要求重新设计场景、穿搭、姿势、构图和光线；"
+                "让画面看起来像同一个人在另一天、另一个地点、另一个姿势重新拍了一张照片。\n"
+                "如果有额外参考图，它们只能作为服装、姿势、构图或场景的松散灵感，不能照搬。\n"
                 "输出真实照片风格，不要拼图，不要水印，不要文字。"
             )
 
         user_prompt = prompt.strip() or "日常自拍照，真实照片风格，自然光"
+        variety = self._get_selfie_str("variation_instruction", "")
+        if not variety:
+            variety = (
+                "请明显区别于参考图：换一个新背景、新姿势、新构图和新镜头距离。"
+            )
+        user_prompt = f"{user_prompt}\n{variety}"
         if extra_refs > 0:
             return f"{prefix}\n\n用户要求：{user_prompt}\n额外参考图数量：{extra_refs}"
         return f"{prefix}\n\n用户要求：{user_prompt}"

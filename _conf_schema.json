@@ -146,7 +146,19 @@
       "prompt_prefix": {
         "description": "自拍提示词前缀",
         "type": "text",
-        "hint": "留空使用内置自拍参考照提示词。",
+        "hint": "留空使用内置提示词：参考图只用于人脸身份，不复刻构图、姿势、背景和光线。",
+        "default": ""
+      },
+      "identity_strength": {
+        "description": "身份参考强度",
+        "type": "string",
+        "hint": "用于提示模型只参考人脸身份。建议 balanced；如果太像原图，改成 loose。",
+        "default": "balanced"
+      },
+      "variation_instruction": {
+        "description": "变化约束",
+        "type": "text",
+        "hint": "默认要求换背景、姿势、构图和镜头距离，避免结果复刻参考图。",
         "default": ""
       },
       "extra_body": {
