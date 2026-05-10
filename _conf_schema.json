@@ -60,5 +60,84 @@
     "hint": "用于兼容不同服务商的额外参数，会覆盖同名默认参数。",
     "items": {},
     "default": {}
+  },
+  "selfie": {
+    "description": "自拍参考照模式",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用自拍参考照",
+        "type": "bool",
+        "default": true
+      },
+      "reference_images": {
+        "description": "WebUI 上传的自拍参考图",
+        "type": "file",
+        "hint": "可上传清晰正脸照；不填时，可通过“发送图片 + /自拍参考 设置”保存参考照。",
+        "file_types": ["jpg", "jpeg", "png", "webp"],
+        "default": []
+      },
+      "edit_endpoint": {
+        "description": "图片编辑接口路径",
+        "type": "string",
+        "hint": "自拍会使用 OpenAI 兼容 images/edits 接口。",
+        "default": "/v1/images/edits"
+      },
+      "model": {
+        "description": "自拍模型",
+        "type": "string",
+        "hint": "留空时复用上方 model。可填 gpt-image-2、gpt-image-2-2k、gpt-image-2-4k。",
+        "default": "gpt-image-2"
+      },
+      "size": {
+        "description": "自拍图片尺寸",
+        "type": "string",
+        "hint": "留空时复用上方 size。",
+        "default": "1024x1024"
+      },
+      "quality": {
+        "description": "自拍图片质量",
+        "type": "string",
+        "hint": "留空时复用上方 quality。",
+        "default": "auto"
+      },
+      "output_format": {
+        "description": "自拍输出格式",
+        "type": "string",
+        "hint": "留空时复用上方 output_format。",
+        "default": "png"
+      },
+      "max_reference_images": {
+        "description": "最多提交参考图数量",
+        "type": "int",
+        "hint": "第一张作为身份参考，当前消息中的图片可作为额外服装、姿势、场景参考。",
+        "default": 2
+      },
+      "recent_image_ttl_seconds": {
+        "description": "最近图片缓存时间",
+        "type": "int",
+        "hint": "先发送图片，再输入 /自拍参考 设置 时，图片可被记住多久。",
+        "default": 600
+      },
+      "image_field": {
+        "description": "multipart 图片字段名",
+        "type": "string",
+        "hint": "多数 OpenAI 兼容 images/edits 使用 image；若网关要求 image[] 可改这里。",
+        "default": "image"
+      },
+      "prompt_prefix": {
+        "description": "自拍提示词前缀",
+        "type": "text",
+        "hint": "留空使用内置自拍参考照提示词。",
+        "default": ""
+      },
+      "extra_body": {
+        "description": "自拍额外请求体参数",
+        "type": "object",
+        "hint": "用于兼容不同服务商的 images/edits 额外字段。",
+        "items": {},
+        "default": {}
+      }
+    }
   }
 }

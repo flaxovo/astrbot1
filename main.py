@@ -5,6 +5,7 @@ import base64
 import json
 import mimetypes
 import os
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -25,6 +26,7 @@ PLUGIN_NAME = "astrbot_plugin_gpt_img_2"
 DEFAULT_KEYWORDS = ["画图", "绘图", "生成图片", "gptimg", "gpt-img-2"]
 DEFAULT_BASE_URL = "https://api.xbyjs.top"
 DEFAULT_ENDPOINT = "/v1/images/generations"
+DEFAULT_EDIT_ENDPOINT = "/v1/images/edits"
 DEFAULT_MODEL = "gpt-image-2"
 
 
@@ -39,14 +41,16 @@ class GptImg2Plugin(Star):
         super().__init__(context)
         self.config = config or {}
         if get_astrbot_data_path is None:
-            self.output_dir = Path(__file__).resolve().parent / "generated"
+            self.data_dir = Path(__file__).resolve().parent
         else:
-            self.output_dir = (
-                Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME / "generated"
-            )
+            self.data_dir = Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME
+        self.output_dir = self.data_dir / "generated"
+        self.selfie_ref_dir = self.data_dir / "selfie_refs"
+        self._recent_images_by_user: dict[str, tuple[float, list[bytes]]] = {}
 
     async def initialize(self):
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.selfie_ref_dir.mkdir(parents=True, exist_ok=True)
 
     @filter.command("gptimg", alias=["画图", "绘图", "生成图片", "gpt-img-2"])
     async def gptimg(self, event: AstrMessageEvent):
@@ -62,10 +66,25 @@ class GptImg2Plugin(Star):
         if message.startswith("/"):
             return
         if not self._matches_keyword(message):
+            await self._remember_recent_images(event)
             return
 
         prompt = self._extract_keyword_prompt(message)
         async for result in self._handle_generation(event, prompt):
+            yield result
+
+    @filter.command("自拍")
+    async def selfie(self, event: AstrMessageEvent):
+        """基于自拍参考照生成新的自拍图。用法：/自拍 窗边自然光，微笑"""
+        prompt = self._extract_command_prompt(event)
+        async for result in self._handle_selfie(event, prompt):
+            yield result
+
+    @filter.command("自拍参考")
+    async def selfie_reference(self, event: AstrMessageEvent):
+        """管理自拍参考照。用法：发送图片 + /自拍参考 设置"""
+        action = self._extract_command_prompt(event).strip()
+        async for result in self._handle_selfie_reference(event, action):
             yield result
 
     async def _handle_generation(self, event: AstrMessageEvent, prompt: str):
@@ -91,8 +110,92 @@ class GptImg2Plugin(Star):
 
         yield event.image_result(image_ref)
 
+    async def _handle_selfie(self, event: AstrMessageEvent, prompt: str):
+        event.stop_event()
+        if not self._get_selfie_bool("enabled", True):
+            yield event.plain_result("自拍参考照功能已关闭。")
+            return
+
+        prompt = prompt.strip() or "日常自拍照，真实照片风格，自然光"
+        api_key = self._get_config_str("api_key") or os.getenv("OPENAI_API_KEY", "")
+        if not api_key:
+            yield event.plain_result("请先在插件配置中填写 api_key，或设置 OPENAI_API_KEY。")
+            return
+
+        try:
+            image_ref = await self._generate_selfie(api_key, event, prompt)
+        except Exception as exc:
+            logger.exception("gpt-img-2 selfie generation failed")
+            yield event.plain_result(f"自拍生成失败：{exc}")
+            return
+
+        yield event.image_result(image_ref)
+
+    async def _handle_selfie_reference(self, event: AstrMessageEvent, action: str):
+        event.stop_event()
+        if not self._get_selfie_bool("enabled", True):
+            yield event.plain_result("自拍参考照功能已关闭。")
+            return
+
+        normalized = action.strip() or "帮助"
+        if normalized in {"设置", "set", "save"}:
+            try:
+                count = await self._save_selfie_reference_from_event(event)
+            except Exception as exc:
+                logger.exception("save selfie reference failed")
+                yield event.plain_result(f"自拍参考照设置失败：{exc}")
+                return
+            yield event.plain_result(f"已保存 {count} 张自拍参考照。")
+            return
+
+        if normalized in {"查看", "show", "list"}:
+            paths = self._get_selfie_reference_paths()
+            if not paths:
+                yield event.plain_result(
+                    "还没有自拍参考照。请先发送图片并输入：/自拍参考 设置"
+                )
+                return
+            yield event.image_result(str(paths[0]))
+            yield event.plain_result(f"当前共有 {len(paths)} 张自拍参考照。")
+            return
+
+        if normalized in {"删除", "delete", "clear"}:
+            count = self._delete_saved_selfie_references()
+            yield event.plain_result(f"已删除 {count} 张命令保存的自拍参考照。")
+            return
+
+        yield event.plain_result(
+            "自拍参考照用法：发送图片 + /自拍参考 设置；/自拍参考 查看；/自拍参考 删除；/自拍 日常自拍照，窗边自然光。"
+        )
+
     async def _generate_image(self, api_key: str, prompt: str) -> str:
         response = await asyncio.to_thread(self._request_image_generation, api_key, prompt)
+        return self._image_ref_from_response(response)
+
+    async def _generate_selfie(
+        self, api_key: str, event: AstrMessageEvent, prompt: str
+    ) -> str:
+        reference_images = self._get_selfie_reference_images()
+        if not reference_images:
+            raise RuntimeError(
+                "未设置自拍参考照。请先发送一张清晰人像图，然后输入：/自拍参考 设置"
+            )
+
+        extra_images = await self._extract_event_image_bytes(event)
+        final_prompt = self._build_selfie_prompt(prompt, extra_refs=len(extra_images))
+        request_images = [*reference_images, *extra_images]
+        max_images = self._get_selfie_int("max_reference_images", 2)
+        request_images = request_images[: max(1, max_images)]
+
+        response = await asyncio.to_thread(
+            self._request_image_edit,
+            api_key,
+            final_prompt,
+            request_images,
+        )
+        return self._image_ref_from_response(response)
+
+    def _image_ref_from_response(self, response: dict[str, Any]) -> str:
         data = response.get("data") or []
         if not data:
             raise RuntimeError("接口没有返回图片数据")
@@ -115,7 +218,7 @@ class GptImg2Plugin(Star):
     def _request_image_generation(self, api_key: str, prompt: str) -> dict[str, Any]:
         base_url = self._get_config_str("base_url", DEFAULT_BASE_URL).rstrip("/")
         endpoint = self._get_config_str("endpoint", DEFAULT_ENDPOINT)
-        url = f"{base_url}/{endpoint.lstrip('/')}"
+        url = self._build_api_url(base_url, endpoint)
 
         payload = {
             "model": self._get_config_str("model", DEFAULT_MODEL),
@@ -165,6 +268,344 @@ class GptImg2Plugin(Star):
         if isinstance(parsed, dict):
             return parsed
         raise RuntimeError("图片接口返回格式不正确")
+
+    def _request_image_edit(
+        self, api_key: str, prompt: str, images: list[bytes]
+    ) -> dict[str, Any]:
+        if not images:
+            raise RuntimeError("缺少自拍参考图片")
+
+        base_url = self._get_config_str("base_url", DEFAULT_BASE_URL).rstrip("/")
+        endpoint = self._get_selfie_str("edit_endpoint", DEFAULT_EDIT_ENDPOINT)
+        url = self._build_api_url(base_url, endpoint)
+
+        model = self._get_selfie_str("model")
+        if not model:
+            model = self._get_config_str("model", DEFAULT_MODEL)
+        size = self._get_selfie_str("size")
+        if not size:
+            size = self._get_config_str("size", "1024x1024")
+
+        fields = {
+            "model": model,
+            "prompt": prompt,
+            "size": size,
+            "n": "1",
+        }
+
+        quality = self._get_selfie_str("quality")
+        if not quality:
+            quality = self._get_config_str("quality", "auto")
+        if quality:
+            fields["quality"] = quality
+
+        output_format = self._get_selfie_str("output_format")
+        if not output_format:
+            output_format = self._get_config_str("output_format", "png")
+        if output_format:
+            fields["output_format"] = output_format
+
+        extra_body = self._get_selfie_value("extra_body", {})
+        if isinstance(extra_body, dict):
+            for key, value in extra_body.items():
+                if value is not None:
+                    fields[str(key)] = str(value)
+
+        image_field = self._get_selfie_str("image_field", "image")
+        files = [
+            (
+                image_field,
+                f"reference_{index + 1}.{self._guess_image_ext(image_bytes)}",
+                image_bytes,
+                self._guess_image_mime(image_bytes),
+            )
+            for index, image_bytes in enumerate(images)
+        ]
+        body, content_type = self._build_multipart_body(fields, files)
+
+        request = urllib.request.Request(
+            url=url,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": content_type,
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+
+        timeout = self._get_config_int("timeout", 120)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body_text = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            body_text = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(self._format_api_error(exc.code, body_text)) from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"无法连接图片编辑接口：{exc.reason}") from exc
+
+        try:
+            parsed = json.loads(body_text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("图片编辑接口返回了无法解析的 JSON") from exc
+
+        if isinstance(parsed, dict):
+            return parsed
+        raise RuntimeError("图片编辑接口返回格式不正确")
+
+    def _build_multipart_body(
+        self,
+        fields: dict[str, str],
+        files: list[tuple[str, str, bytes, str]],
+    ) -> tuple[bytes, str]:
+        boundary = f"----astrbot-gpt-img-2-{uuid.uuid4().hex}"
+        chunks: list[bytes] = []
+
+        for name, value in fields.items():
+            chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+            chunks.append(
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(
+                    "utf-8"
+                )
+            )
+            chunks.append(str(value).encode("utf-8"))
+            chunks.append(b"\r\n")
+
+        for name, filename, content, content_type in files:
+            chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+            chunks.append(
+                (
+                    f'Content-Disposition: form-data; name="{name}"; '
+                    f'filename="{filename}"\r\n'
+                ).encode("utf-8")
+            )
+            chunks.append(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
+            chunks.append(content)
+            chunks.append(b"\r\n")
+
+        chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+        return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+    def _build_api_url(self, base_url: str, endpoint: str) -> str:
+        base = base_url.rstrip("/")
+        path = endpoint.lstrip("/")
+        if base.endswith("/v1") and path.startswith("v1/"):
+            path = path[3:]
+        return f"{base}/{path}"
+
+    async def _save_selfie_reference_from_event(self, event: AstrMessageEvent) -> int:
+        images = await self._extract_event_image_bytes(event)
+        if not images:
+            images = self._get_recent_images(event)
+        if not images:
+            raise RuntimeError(
+                "当前消息里没有读到图片。请先发送图片，再输入 /自拍参考 设置。"
+            )
+
+        max_images = self._get_selfie_int("max_reference_images", 2)
+        images = images[: max(1, max_images)]
+        self.selfie_ref_dir.mkdir(parents=True, exist_ok=True)
+
+        self._delete_saved_selfie_references()
+        for index, image_bytes in enumerate(images):
+            ext = self._guess_image_ext(image_bytes)
+            path = self.selfie_ref_dir / f"selfie_ref_{index + 1}.{ext}"
+            path.write_bytes(image_bytes)
+        return len(images)
+
+    async def _remember_recent_images(self, event: AstrMessageEvent) -> None:
+        images = await self._extract_event_image_bytes(event)
+        if not images:
+            return
+        self._recent_images_by_user[self._event_user_key(event)] = (time.time(), images)
+
+    def _get_recent_images(self, event: AstrMessageEvent) -> list[bytes]:
+        key = self._event_user_key(event)
+        cached = self._recent_images_by_user.get(key)
+        if not cached:
+            return []
+
+        cached_at, images = cached
+        ttl = max(30, self._get_selfie_int("recent_image_ttl_seconds", 600))
+        if time.time() - cached_at > ttl:
+            self._recent_images_by_user.pop(key, None)
+            return []
+        return images
+
+    def _event_user_key(self, event: AstrMessageEvent) -> str:
+        try:
+            sender_id = str(event.get_sender_id() or "")
+        except Exception:
+            sender_id = ""
+        parts = [
+            str(getattr(event, "unified_msg_origin", "") or ""),
+            sender_id,
+        ]
+        return "::".join(part for part in parts if part) or "default"
+
+    def _delete_saved_selfie_references(self) -> int:
+        if not self.selfie_ref_dir.exists():
+            return 0
+        count = 0
+        for path in self.selfie_ref_dir.iterdir():
+            if path.is_file():
+                path.unlink()
+                count += 1
+        return count
+
+    def _get_selfie_reference_paths(self) -> list[Path]:
+        configured = self._get_selfie_value("reference_images", [])
+        paths: list[Path] = []
+        if isinstance(configured, list):
+            for value in configured:
+                path = self._resolve_reference_path(str(value))
+                if path and path.is_file():
+                    paths.append(path)
+
+        if paths:
+            return paths
+
+        if not self.selfie_ref_dir.exists():
+            return []
+        return sorted(
+            path
+            for path in self.selfie_ref_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+        )
+
+    def _get_selfie_reference_images(self) -> list[bytes]:
+        images: list[bytes] = []
+        for path in self._get_selfie_reference_paths():
+            try:
+                image_bytes = path.read_bytes()
+            except OSError:
+                continue
+            if image_bytes:
+                images.append(image_bytes)
+        return images
+
+    def _resolve_reference_path(self, value: str) -> Path | None:
+        text = value.strip()
+        if not text:
+            return None
+
+        path = Path(text)
+        if path.is_absolute():
+            return path
+
+        candidates = [
+            self.data_dir / text,
+            Path(__file__).resolve().parent / text,
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return self.data_dir / text
+
+    async def _extract_event_image_bytes(self, event: AstrMessageEvent) -> list[bytes]:
+        images: list[bytes] = []
+        for segment in self._get_event_segments(event):
+            image_bytes = await self._segment_to_image_bytes(segment)
+            if image_bytes:
+                images.append(image_bytes)
+        return images
+
+    def _get_event_segments(self, event: AstrMessageEvent) -> list[Any]:
+        try:
+            segments = event.get_messages()
+            if isinstance(segments, list):
+                return segments
+        except Exception:
+            pass
+
+        message_obj = getattr(event, "message_obj", None)
+        segments = getattr(message_obj, "message", None)
+        return segments if isinstance(segments, list) else []
+
+    async def _segment_to_image_bytes(self, segment: Any) -> bytes | None:
+        if not self._looks_like_image_segment(segment):
+            return None
+
+        convert_to_base64 = getattr(segment, "convert_to_base64", None)
+        if callable(convert_to_base64):
+            try:
+                encoded = await convert_to_base64()
+                return self._decode_image_base64(str(encoded))
+            except Exception as exc:
+                logger.warning("convert image segment to base64 failed: %s", exc)
+
+        for attr in ("path", "file"):
+            value = str(getattr(segment, attr, "") or "").strip()
+            if value.startswith("file://"):
+                value = value[7:]
+            if value and Path(value).is_file():
+                return await asyncio.to_thread(Path(value).read_bytes)
+
+        url = str(getattr(segment, "url", "") or "").strip()
+        if url.startswith(("http://", "https://")):
+            return await asyncio.to_thread(self._download_image_bytes, url)
+        return None
+
+    def _looks_like_image_segment(self, segment: Any) -> bool:
+        if segment is None:
+            return False
+        class_name = segment.__class__.__name__.lower()
+        if class_name == "image":
+            return True
+        if callable(getattr(segment, "convert_to_base64", None)):
+            return True
+        return any(getattr(segment, attr, None) for attr in ("url", "file", "path"))
+
+    def _download_image_bytes(self, url: str) -> bytes:
+        request = urllib.request.Request(url, headers={"User-Agent": "AstrBot-gpt-img-2"})
+        timeout = min(self._get_config_int("timeout", 120), 30)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            content_type = response.headers.get("Content-Type", "")
+            if "image" not in content_type and "octet-stream" not in content_type:
+                raise RuntimeError(f"URL 不是图片：{content_type}")
+            image_bytes = response.read(20 * 1024 * 1024 + 1)
+        if len(image_bytes) > 20 * 1024 * 1024:
+            raise RuntimeError("图片超过 20MB")
+        return image_bytes
+
+    def _decode_image_base64(self, value: str) -> bytes:
+        text = value.strip()
+        if text.startswith("data:image/"):
+            _, _, text = text.partition(",")
+        if text.startswith("base64://"):
+            text = text[len("base64://") :]
+        return base64.b64decode(text, validate=False)
+
+    def _build_selfie_prompt(self, prompt: str, extra_refs: int) -> str:
+        prefix = self._get_selfie_str("prompt_prefix", "")
+        if not prefix:
+            prefix = (
+                "请根据参考图生成一张新的自拍照：以第一张参考图的人脸身份和气质为准，"
+                "保持五官特征一致；如果有额外参考图，仅作为服装、姿势、构图或场景参考；"
+                "输出真实照片风格，不要拼图，不要水印，不要文字。"
+            )
+
+        user_prompt = prompt.strip() or "日常自拍照，真实照片风格，自然光"
+        if extra_refs > 0:
+            return f"{prefix}\n\n用户要求：{user_prompt}\n额外参考图数量：{extra_refs}"
+        return f"{prefix}\n\n用户要求：{user_prompt}"
+
+    def _guess_image_ext(self, image_bytes: bytes) -> str:
+        if image_bytes.startswith(b"\xff\xd8\xff"):
+            return "jpg"
+        if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "png"
+        if image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP":
+            return "webp"
+        if image_bytes.startswith(b"GIF"):
+            return "gif"
+        return "png"
+
+    def _guess_image_mime(self, image_bytes: bytes) -> str:
+        ext = self._guess_image_ext(image_bytes)
+        if ext == "jpg":
+            return "image/jpeg"
+        return f"image/{ext}"
 
     def _extract_command_prompt(self, event: AstrMessageEvent) -> str:
         message = event.message_str.strip()
@@ -232,6 +673,34 @@ class GptImg2Plugin(Star):
             return int(value)
         except (TypeError, ValueError):
             return default
+
+    def _get_selfie_config(self) -> dict[str, Any]:
+        value = self.config.get("selfie", {})
+        return value if isinstance(value, dict) else {}
+
+    def _get_selfie_value(self, key: str, default: Any = None) -> Any:
+        return self._get_selfie_config().get(key, default)
+
+    def _get_selfie_str(self, key: str, default: str = "") -> str:
+        value = self._get_selfie_value(key, default)
+        if value is None:
+            return default
+        return str(value).strip()
+
+    def _get_selfie_int(self, key: str, default: int) -> int:
+        value = self._get_selfie_value(key, default)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _get_selfie_bool(self, key: str, default: bool) -> bool:
+        value = self._get_selfie_value(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "开启", "是"}
+        return bool(value)
 
     def _extension_for_format(self, output_format: str) -> str:
         mime_type = f"image/{output_format}"
