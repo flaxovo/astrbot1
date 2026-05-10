@@ -56,7 +56,7 @@
   },
   "extra_body": {
     "description": "额外请求体参数",
-    "type": "dict",
+    "type": "object",
     "hint": "用于兼容不同服务商的额外参数，会覆盖同名默认参数。",
     "items": {},
     "default": {}
