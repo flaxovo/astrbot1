@@ -27,8 +27,8 @@
   "size": {
     "description": "图片尺寸",
     "type": "string",
-    "hint": "常用值：1024x1024、1024x1536、1536x1024。具体支持范围取决于模型和服务商。",
-    "default": "1024x1024"
+    "hint": "默认 auto：按提示词自动选择方图/竖图/横图。也可固定为 1024x1024、1024x1536、1536x1024。",
+    "default": "auto"
   },
   "quality": {
     "description": "图片质量",
@@ -92,8 +92,8 @@
       "size": {
         "description": "自拍图片尺寸",
         "type": "string",
-        "hint": "留空时复用上方 size。",
-        "default": "1024x1024"
+        "hint": "默认 auto：自拍/穿搭会自动使用竖图。也可固定为 1024x1024、1024x1536、1536x1024。",
+        "default": "auto"
       },
       "quality": {
         "description": "自拍图片质量",
@@ -118,6 +118,18 @@
         "type": "int",
         "hint": "先发送图片，再输入 /自拍参考 设置 时，图片可被记住多久。",
         "default": 600
+      },
+      "natural_confirm_enabled": {
+        "description": "自然语言确认触发",
+        "type": "bool",
+        "hint": "开启后，用户说“看看你”“拍张今天照片”“看看今天穿搭”等会先追问是否要看照片。",
+        "default": true
+      },
+      "confirm_ttl_seconds": {
+        "description": "自拍确认等待时间",
+        "type": "int",
+        "hint": "追问“要看照片吗？”后，等待用户回复“要看”等确认词的时间。",
+        "default": 180
       },
       "image_field": {
         "description": "multipart 图片字段名",

@@ -47,6 +47,7 @@ class GptImg2Plugin(Star):
         self.output_dir = self.data_dir / "generated"
         self.selfie_ref_dir = self.data_dir / "selfie_refs"
         self._recent_images_by_user: dict[str, tuple[float, list[bytes]]] = {}
+        self._pending_selfie_confirm: dict[str, tuple[float, str]] = {}
 
     async def initialize(self):
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -65,6 +66,29 @@ class GptImg2Plugin(Star):
         message = event.message_str.strip()
         if message.startswith("/"):
             return
+
+        pending_prompt, confirmation_handled = self._resolve_pending_selfie(
+            event, message
+        )
+        if confirmation_handled:
+            if pending_prompt:
+                async for result in self._handle_selfie(event, pending_prompt):
+                    yield result
+            else:
+                event.stop_event()
+                yield event.plain_result("好，那我先不发照片。")
+            return
+
+        natural_selfie_prompt = self._build_natural_selfie_prompt(message)
+        if natural_selfie_prompt:
+            event.stop_event()
+            self._pending_selfie_confirm[self._event_user_key(event)] = (
+                time.time(),
+                natural_selfie_prompt,
+            )
+            yield event.plain_result("要看照片吗？你回“要看”我就拍一张给你。")
+            return
+
         if not self._matches_keyword(message):
             await self._remember_recent_images(event)
             return
@@ -170,7 +194,9 @@ class GptImg2Plugin(Star):
 
     async def _generate_image(self, api_key: str, prompt: str) -> str:
         response = await asyncio.to_thread(self._request_image_generation, api_key, prompt)
-        return self._image_ref_from_response(response)
+        return self._image_ref_from_response(
+            response, self._get_config_str("output_format", "png")
+        )
 
     async def _generate_selfie(
         self, api_key: str, event: AstrMessageEvent, prompt: str
@@ -193,9 +219,14 @@ class GptImg2Plugin(Star):
             final_prompt,
             request_images,
         )
-        return self._image_ref_from_response(response)
+        output_format = self._get_selfie_str("output_format")
+        if not output_format:
+            output_format = self._get_config_str("output_format", "png")
+        return self._image_ref_from_response(response, output_format)
 
-    def _image_ref_from_response(self, response: dict[str, Any]) -> str:
+    def _image_ref_from_response(
+        self, response: dict[str, Any], output_format: str
+    ) -> str:
         data = response.get("data") or []
         if not data:
             raise RuntimeError("接口没有返回图片数据")
@@ -208,8 +239,7 @@ class GptImg2Plugin(Star):
         if not b64_json:
             raise RuntimeError("接口响应中没有 url 或 b64_json")
 
-        output_format = self._get_config_str("output_format", "png").lower()
-        extension = self._extension_for_format(output_format)
+        extension = self._extension_for_format(output_format.lower())
         filename = f"{uuid.uuid4().hex}.{extension}"
         output_path = self.output_dir / filename
         output_path.write_bytes(base64.b64decode(b64_json))
@@ -223,7 +253,7 @@ class GptImg2Plugin(Star):
         payload = {
             "model": self._get_config_str("model", DEFAULT_MODEL),
             "prompt": prompt,
-            "size": self._get_config_str("size", "1024x1024"),
+            "size": self._resolve_size(prompt, self._get_config_str("size", "auto")),
             "n": 1,
         }
 
@@ -284,12 +314,12 @@ class GptImg2Plugin(Star):
             model = self._get_config_str("model", DEFAULT_MODEL)
         size = self._get_selfie_str("size")
         if not size:
-            size = self._get_config_str("size", "1024x1024")
+            size = self._get_config_str("size", "auto")
 
         fields = {
             "model": model,
             "prompt": prompt,
-            "size": size,
+            "size": self._resolve_size(prompt, size),
             "n": "1",
         }
 
@@ -442,6 +472,123 @@ class GptImg2Plugin(Star):
             sender_id,
         ]
         return "::".join(part for part in parts if part) or "default"
+
+    def _resolve_pending_selfie(
+        self, event: AstrMessageEvent, message: str
+    ) -> tuple[str, bool]:
+        key = self._event_user_key(event)
+        pending = self._pending_selfie_confirm.get(key)
+        if not pending:
+            return "", False
+
+        created_at, prompt = pending
+        ttl = max(30, self._get_selfie_int("confirm_ttl_seconds", 180))
+        if time.time() - created_at > ttl:
+            self._pending_selfie_confirm.pop(key, None)
+            return "", False
+
+        if self._is_selfie_confirm_yes(message):
+            self._pending_selfie_confirm.pop(key, None)
+            return prompt, True
+        if self._is_selfie_confirm_no(message):
+            self._pending_selfie_confirm.pop(key, None)
+            return "", True
+        return "", False
+
+    def _is_selfie_confirm_yes(self, message: str) -> bool:
+        text = message.strip().lower()
+        yes_words = {
+            "要",
+            "要看",
+            "看看",
+            "看",
+            "发",
+            "发来",
+            "发我",
+            "拍",
+            "拍一张",
+            "来一张",
+            "来张",
+            "可以",
+            "好",
+            "好的",
+            "行",
+            "嗯",
+            "ok",
+            "yes",
+        }
+        return text in yes_words or any(
+            marker in text
+            for marker in ("要看", "看看", "发来", "发我", "拍一张", "来一张")
+        )
+
+    def _is_selfie_confirm_no(self, message: str) -> bool:
+        text = message.strip().lower()
+        no_words = {"不要", "不用", "别", "算了", "不看", "no"}
+        return text in no_words or any(
+            marker in text for marker in ("不要", "不用", "算了", "不看")
+        )
+
+    def _build_natural_selfie_prompt(self, message: str) -> str:
+        if not self._get_selfie_bool("natural_confirm_enabled", True):
+            return ""
+        if not self._get_selfie_bool("enabled", True):
+            return ""
+
+        text = message.strip()
+        lowered = text.lower()
+        if not text:
+            return ""
+
+        selfie_markers = (
+            "看看你",
+            "看下你",
+            "看一下你",
+            "让我看看你",
+            "给我看看你",
+            "你长什么样",
+            "你的照片",
+            "你的自拍",
+            "你自己的照片",
+            "拍张照片",
+            "拍张今天照片",
+            "今天照片",
+            "自拍给我",
+            "bot自拍",
+            "机器人自拍",
+        )
+        outfit_markers = (
+            "今天的穿搭",
+            "今天穿搭",
+            "看看穿搭",
+            "看下穿搭",
+            "穿搭给我看",
+            "ootd",
+            "outfit",
+        )
+        english_markers = (
+            "your selfie",
+            "your photo",
+            "your picture",
+            "your face",
+            "show me you",
+            "send me a selfie",
+        )
+
+        if any(marker in text for marker in outfit_markers) or any(
+            marker in lowered for marker in ("ootd", "outfit")
+        ):
+            return (
+                "今天穿搭自拍照，真实照片风格，展示上半身或全身穿搭，"
+                "自然光，生活感，构图清晰"
+            )
+        if any(marker in text for marker in selfie_markers) or any(
+            marker in lowered for marker in english_markers
+        ):
+            if "今天" in text:
+                return "今天的日常自拍照，真实照片风格，自然光，生活感"
+            return "日常自拍照，真实照片风格，自然光，亲近自然的表情"
+        return ""
 
     def _delete_saved_selfie_references(self) -> int:
         if not self.selfie_ref_dir.exists():
@@ -673,6 +820,46 @@ class GptImg2Plugin(Star):
             return int(value)
         except (TypeError, ValueError):
             return default
+
+    def _resolve_size(self, prompt: str, configured_size: str) -> str:
+        size = str(configured_size or "").strip().lower()
+        if size and size not in {"auto", "自动"}:
+            return configured_size
+
+        text = prompt.lower()
+        portrait_markers = (
+            "自拍",
+            "人像",
+            "人物",
+            "全身",
+            "半身",
+            "穿搭",
+            "ootd",
+            "outfit",
+            "portrait",
+            "selfie",
+            "手机壁纸",
+            "海报",
+        )
+        landscape_markers = (
+            "风景",
+            "山水",
+            "城市",
+            "街景",
+            "全景",
+            "横版",
+            "宽屏",
+            "桌面壁纸",
+            "landscape",
+            "panorama",
+            "banner",
+        )
+
+        if any(marker in text for marker in landscape_markers):
+            return "1536x1024"
+        if any(marker in text for marker in portrait_markers):
+            return "1024x1536"
+        return "1024x1024"
 
     def _get_selfie_config(self) -> dict[str, Any]:
         value = self.config.get("selfie", {})
