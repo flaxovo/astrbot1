@@ -111,6 +111,51 @@ class GptImg2Plugin(Star):
         async for result in self._handle_selfie_reference(event, action):
             yield result
 
+    @filter.llm_tool(name="gpt_img_2_generate")
+    async def gpt_img_2_generate(
+        self,
+        event: AstrMessageEvent,
+        prompt: str,
+        mode: str = "auto",
+        ask_first: bool = False,
+    ):
+        """生成图片或基于自拍参考照生成 Bot 自拍。
+
+        使用建议：
+        - 用户明确要求画一张图、生成某个场景或物品：mode=text，ask_first=false。
+        - 用户说“让我看看你”“拍张今天照片”“看看今天穿搭”等，但还没有明确同意看照片：mode=ask_selfie，ask_first=true。
+        - 用户已经回复“要看/看看/来一张/好/OK”等确认词：mode=selfie，ask_first=false。
+        - 用户在聊 Bot 自己的照片、自拍、穿搭、今天怎么穿：优先使用 selfie，而不是普通文生图。
+        - 成功后插件会直接把图片发送给用户，模型不要再伪造图片或描述成已经看过真实照片。
+
+        Args:
+            prompt(string): 图片提示词。自拍模式下写清楚场景、穿搭、光线、姿势。
+            mode(string): auto/text/selfie/ask_selfie。auto 会按提示词语义选择。
+            ask_first(boolean): true 表示只追问确认并记录待生成提示词，不立即生成。
+        """
+        prompt = (prompt or "").strip()
+        resolved_mode = self._resolve_llm_tool_mode(prompt, mode, ask_first)
+
+        if resolved_mode == "ask_selfie":
+            event.stop_event()
+            pending_prompt = prompt or self._default_selfie_prompt()
+            self._pending_selfie_confirm[self._event_user_key(event)] = (
+                time.time(),
+                pending_prompt,
+            )
+            yield event.plain_result("要看照片吗？你回“要看”我就拍一张给你。")
+            return
+
+        if resolved_mode == "selfie":
+            async for result in self._handle_selfie(
+                event, prompt or self._default_selfie_prompt()
+            ):
+                yield result
+            return
+
+        async for result in self._handle_generation(event, prompt):
+            yield result
+
     async def _handle_generation(self, event: AstrMessageEvent, prompt: str):
         event.stop_event()
         prompt = prompt.strip()
@@ -140,7 +185,7 @@ class GptImg2Plugin(Star):
             yield event.plain_result("自拍参考照功能已关闭。")
             return
 
-        prompt = prompt.strip() or "日常自拍照，真实照片风格，自然光"
+        prompt = prompt.strip() or self._default_selfie_prompt()
         api_key = self._get_config_str("api_key") or os.getenv("OPENAI_API_KEY", "")
         if not api_key:
             yield event.plain_result("请先在插件配置中填写 api_key，或设置 OPENAI_API_KEY。")
@@ -587,8 +632,29 @@ class GptImg2Plugin(Star):
         ):
             if "今天" in text:
                 return "今天的日常自拍照，真实照片风格，自然光，生活感"
-            return "日常自拍照，真实照片风格，自然光，亲近自然的表情"
+            return self._default_selfie_prompt()
         return ""
+
+    def _resolve_llm_tool_mode(
+        self, prompt: str, mode: str, ask_first: bool
+    ) -> str:
+        raw_mode = (mode or "auto").strip().lower()
+        if ask_first or raw_mode in {"ask", "ask_selfie", "confirm", "confirm_selfie"}:
+            return "ask_selfie"
+        if raw_mode in {"selfie", "selfie_ref", "ref", "photo_of_bot"}:
+            return "selfie"
+        if raw_mode in {"text", "draw", "image", "txt2img"}:
+            return "text"
+        if raw_mode != "auto":
+            return "text"
+
+        natural_prompt = self._build_natural_selfie_prompt(prompt)
+        if natural_prompt:
+            return "selfie"
+        return "text"
+
+    def _default_selfie_prompt(self) -> str:
+        return "日常自拍照，真实照片风格，自然光，亲近自然的表情"
 
     def _delete_saved_selfie_references(self) -> int:
         if not self.selfie_ref_dir.exists():
