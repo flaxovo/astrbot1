@@ -39,7 +39,7 @@ AstrBot 图片生成插件。用户发送关键词和图片描述后，插件会
 | `quality` | 图片质量，默认 `auto`。 |
 | `output_format` | 输出格式，默认 `png`。 |
 | `keywords` | 免斜杠关键词列表，默认 `画图`、`绘图`、`生成图片`、`gptimg`、`gpt-img-2`。 |
-| `natural_image_enabled` | 是否启用自然语言文生图触发，默认开启。 |
+| `natural_image_enabled` | 是否启用自然语言文生图触发，默认开启；开启后由当前 LLM 判断普通消息是否明确要求生成图片。 |
 | `extra_body` | 额外请求体参数，用于兼容不同服务商。 |
 | `tts.enabled` | 是否启用火山语音合成，默认开启。 |
 | `tts.app_id` | 火山语音合成 App ID，默认 `9694280449`，也可用环境变量 `VOLC_TTS_APP_ID`。 |

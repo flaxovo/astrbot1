@@ -62,7 +62,7 @@ DEFAULT_PROACTIVE_CAPTIONS = [
     PLUGIN_NAME,
     "flaw",
     "通过关键词调用 OpenAI 兼容图片生成接口，根据用户描述生成图片。",
-    "1.1.1",
+    "1.1.2",
 )
 class GptImg2Plugin(Star):
     def __init__(self, context: Context, config: dict[str, Any] | None = None):
@@ -124,19 +124,19 @@ class GptImg2Plugin(Star):
                 )
             return
 
-        natural_image_prompt = self._build_natural_image_prompt(message)
+        if self._matches_keyword(message):
+            prompt = self._extract_keyword_prompt(message)
+            async for result in self._handle_generation(event, prompt):
+                yield result
+            return
+
+        natural_image_prompt = await self._build_natural_image_prompt(event, message)
         if natural_image_prompt:
             async for result in self._handle_generation(event, natural_image_prompt):
                 yield result
             return
 
-        if not self._matches_keyword(message):
-            await self._remember_recent_images(event)
-            return
-
-        prompt = self._extract_keyword_prompt(message)
-        async for result in self._handle_generation(event, prompt):
-            yield result
+        await self._remember_recent_images(event)
 
     @filter.command("自拍")
     async def selfie(self, event: AstrMessageEvent):
@@ -1657,42 +1657,114 @@ class GptImg2Plugin(Star):
             return self._default_selfie_prompt()
         return ""
 
-    def _build_natural_image_prompt(self, message: str) -> str:
+    async def _build_natural_image_prompt(
+        self, event: AstrMessageEvent, message: str
+    ) -> str:
         if not self._get_config_bool("natural_image_enabled", True):
             return ""
 
-        text = self._normalize_chat_request_text(message)
-        if not text:
+        text = message.strip()
+        if not text or len(text) > 500:
             return ""
 
-        trigger_patterns = (
-            r"(?:帮我|给我|替我|麻烦你)?(?:生成|画|绘制|做|整)(?:一张|一个|张|个)?(?P<prompt>.+)",
-            r"(?:帮我|给我|替我|麻烦你)?(?:来一张|来张|整一张|整张)(?P<prompt>.+)",
-            r"(?:我想要|想要|我要)(?:一张|一个|张|个)?(?P<prompt>.+)",
-            r"(?:我想看|想看|想看看)(?P<prompt>.+)",
-        )
+        return await self._judge_natural_image_prompt_with_llm(event, text)
 
-        for pattern in trigger_patterns:
-            match = re.search(pattern, text)
-            if not match:
-                continue
-            prompt = self._clean_natural_image_prompt(match.group("prompt"))
-            if self._is_valid_natural_image_prompt(prompt):
-                return prompt
+    async def _judge_natural_image_prompt_with_llm(
+        self, event: AstrMessageEvent, message: str
+    ) -> str:
+        if self.context is None:
+            return ""
+
+        try:
+            completion_text = await self._call_natural_image_judge_llm(event, message)
+        except Exception as exc:
+            logger.debug("natural image llm judgement failed: %s", exc)
+            return ""
+
+        return self._parse_natural_image_judgement(completion_text)
+
+    async def _call_natural_image_judge_llm(
+        self, event: AstrMessageEvent, message: str
+    ) -> str:
+        umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        prompt = self._build_natural_image_judge_prompt(message)
+
+        if hasattr(self.context, "llm_generate") and hasattr(
+            self.context, "get_current_chat_provider_id"
+        ):
+            provider_id = await self.context.get_current_chat_provider_id(umo=umo)
+            response = await self.context.llm_generate(
+                chat_provider_id=provider_id,
+                contexts=[],
+                system_prompt="你是聊天消息的图片生成意图分类器，只输出 JSON。",
+                prompt=prompt,
+                image_urls=[],
+                func_tool=None,
+                session_id=None,
+            )
+            return str(getattr(response, "completion_text", "") or "")
+
+        provider_getter = getattr(self.context, "get_using_provider", None)
+        if provider_getter is not None:
+            provider = provider_getter()
+            if hasattr(provider, "text_chat"):
+                response = await provider.text_chat(
+                    prompt=prompt,
+                    session_id=None,
+                    contexts=[],
+                    image_urls=[],
+                    system_prompt="你是聊天消息的图片生成意图分类器，只输出 JSON。",
+                )
+                return str(getattr(response, "completion_text", response) or "")
+
         return ""
 
-    def _normalize_chat_request_text(self, message: str) -> str:
-        text = re.sub(r"\s+", "", message.strip())
-        text = re.sub(r"^(宝宝|宝贝|亲爱的|老婆|老公|bot|机器人)[，,。.!！?？]*", "", text)
-        return text
+    def _build_natural_image_judge_prompt(self, message: str) -> str:
+        user_message = json.dumps(message, ensure_ascii=False)
+        return (
+            "判断下面这条用户消息是否是在明确要求机器人立即生成一张普通图片。"
+            "只允许返回一个 JSON 对象，不要解释。\n"
+            "规则：\n"
+            "1. 只有用户明确要求画图、生成图片、做海报/头像/壁纸，或明确说想看某个可被生成的画面时，generate_image 才为 true。\n"
+            "2. 普通问答、情绪倾诉、叙述现实关系、否定句、拒绝句、反问句、假设句，不要生成图片。\n"
+            "3. 看到“不想/不要/别/不用/不需要/不想看/不想要”等否定语境时，generate_image 必须为 false。\n"
+            "4. 用户想看机器人本人、自拍、照片、穿搭时，不归类为普通文生图，generate_image 为 false。\n"
+            "5. generate_image 为 true 时，prompt 写成适合文生图模型的简短中文提示词，去掉寒暄和请求语；否则 prompt 为空字符串。\n"
+            '返回格式：{"generate_image":false,"prompt":""}\n'
+            f"用户消息：{user_message}"
+        )
 
-    def _clean_natural_image_prompt(self, value: str) -> str:
-        text = value.strip()
-        text = re.sub(r"^(一张|一个|张|个|幅|一幅)", "", text)
-        text = re.sub(r"(好吗|好不好|可以吗|行吗|可不可以|吗|嘛|吧|呗|呀|啦|呢)[。.!！?？]*$", "", text)
-        text = re.sub(r"(的)?(图片|图像|图|照片|壁纸|头像|海报)$", "", text)
-        text = text.strip(" ，,。.!！?？：:")
-        return text
+    def _parse_natural_image_judgement(self, completion_text: str) -> str:
+        payload = self._extract_json_object(completion_text)
+        if not isinstance(payload, dict):
+            return ""
+        if payload.get("generate_image") is not True:
+            return ""
+        prompt = str(payload.get("prompt") or "").strip()
+        if self._is_valid_natural_image_prompt(prompt):
+            return prompt
+        return ""
+
+    def _extract_json_object(self, text: str) -> Any:
+        text = (text or "").strip()
+        if not text:
+            return None
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        try:
+            return json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            return None
 
     def _is_valid_natural_image_prompt(self, prompt: str) -> bool:
         if not prompt:

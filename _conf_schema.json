@@ -57,7 +57,7 @@
   "natural_image_enabled": {
     "description": "自然语言文生图触发",
     "type": "bool",
-    "hint": "开启后，“帮我生成一个xxx图片”“我要一张xxx图”“我想看烟花”等会直接生成普通图片。",
+    "hint": "开启后，会先让当前 LLM 判断普通消息是否明确要求生成图片；明确时才生成，否定句/普通聊天不会触发。",
     "default": true
   },
   "extra_body": {
