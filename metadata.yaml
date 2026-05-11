@@ -1,6 +1,6 @@
 name: astrbot_plugin_gpt_img_2
 display_name: gpt-img-2 调用
 desc: 通过关键词调用 OpenAI 兼容图片生成接口，根据用户描述生成图片。
-version: v1.0.6
+version: v1.0.7
 author: flaw
 repo: https://github.com/flaxovo/astrbot1

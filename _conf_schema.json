@@ -107,10 +107,22 @@
         "hint": "按你的角色性格填写多条自然口吻文案，每次主动状态图随机选一句。留空使用内置亲近随手发图口吻。",
         "default": []
       },
+      "person_visible": {
+        "description": "状态图要求人物入镜",
+        "type": "bool",
+        "hint": "开启后，主动状态图会要求看到本人或身体局部，例如半身、侧脸、手、肩膀、腿部或镜中倒影，避免只生成桌面空景。",
+        "default": true
+      },
+      "use_selfie_reference": {
+        "description": "状态图使用自拍参考",
+        "type": "bool",
+        "hint": "开启后，如果已经设置自拍参考照，主动状态图会优先用参考照生成同一角色的查岗自拍；失败时会回退到普通文生图。",
+        "default": true
+      },
       "prompt_templates": {
         "description": "状态图提示词模板",
         "type": "list",
-        "hint": "每次随机选一个模板生成状态图；留空使用内置生活感报备模板。",
+        "hint": "每次随机选一个模板生成状态图；留空使用内置有人入镜的生活感查岗模板。",
         "default": []
       },
       "max_targets_per_tick": {

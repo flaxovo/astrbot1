@@ -49,7 +49,7 @@ DEFAULT_PROACTIVE_CAPTIONS = [
     PLUGIN_NAME,
     "flaw",
     "通过关键词调用 OpenAI 兼容图片生成接口，根据用户描述生成图片。",
-    "1.0.6",
+    "1.0.7",
 )
 class GptImg2Plugin(Star):
     def __init__(self, context: Context, config: dict[str, Any] | None = None):
@@ -385,6 +385,21 @@ class GptImg2Plugin(Star):
             )
 
         extra_images = await self._extract_event_image_bytes(event)
+        return await self._generate_selfie_with_references(
+            api_key,
+            prompt,
+            reference_images,
+            extra_images,
+        )
+
+    async def _generate_selfie_with_references(
+        self,
+        api_key: str,
+        prompt: str,
+        reference_images: list[bytes],
+        extra_images: list[bytes] | None = None,
+    ) -> str:
+        extra_images = extra_images or []
         final_prompt = self._build_selfie_prompt(prompt, extra_refs=len(extra_images))
         request_images = [*reference_images, *extra_images]
         max_images = self._get_selfie_int("max_reference_images", 2)
@@ -637,6 +652,20 @@ class GptImg2Plugin(Star):
         if not api_key:
             raise RuntimeError("api_key 未配置")
         prompt = self._build_proactive_status_prompt()
+        reference_images = self._get_selfie_reference_images()
+        if (
+            reference_images
+            and self._get_selfie_bool("enabled", True)
+            and self._get_proactive_bool("use_selfie_reference", True)
+        ):
+            try:
+                return await self._generate_selfie_with_references(
+                    api_key,
+                    prompt,
+                    reference_images,
+                )
+            except Exception as exc:
+                logger.exception("proactive status selfie generation failed: %s", exc)
         return await self._generate_image(api_key, prompt)
 
     def _build_proactive_status_prompt(self) -> str:
@@ -648,14 +677,21 @@ class GptImg2Plugin(Star):
 
         if not candidates:
             candidates = [
-                "真实生活感状态报备照片：桌边放着打开的电脑、半杯饮料和随手写下的便签，像刚忙完一小段事情发给亲近的人看的照片，温柔自然，手机随拍感，不要文字。",
-                "真实生活感状态报备照片：窗边自然光，一本摊开的书、耳机和手机放在桌上，氛围安静，像在认真做自己的事，手机随拍，不要文字。",
-                "真实生活感状态报备照片：夜晚暖灯下的桌面，屏幕微亮，旁边有小零食和水杯，像在熬夜处理事情时给恋人报备，真实自然，不要文字。",
-                "真实生活感状态报备照片：室内柔和光线，干净桌面、手边小物和一点生活痕迹，表达“我现在在这里”的感觉，真实手机照片风格，不要文字。",
+                "真实生活感查岗自拍：本人坐在桌边，半身或侧脸入镜，桌上有打开的电脑、半杯饮料和随手写下的便签，像刚忙完一小段事情随手拍给亲近的人看，温柔自然，手机随拍感，不要文字。",
+                "真实生活感查岗照片：窗边自然光，本人穿着得体的日常衣服，手臂、肩膀和半张脸自然入镜，旁边有摊开的书、耳机和手机，氛围安静，像在认真做自己的事，手机随拍，不要文字。",
+                "真实生活感查岗自拍：夜晚暖灯下，本人靠在桌前或床边，脸部可以是侧脸或局部，屏幕微亮，旁边有小零食和水杯，像熬夜处理事情时随手给恋人看一眼，真实自然，不要文字。",
+                "真实生活感查岗照片：室内柔和光线，本人的手、腿部、肩膀或镜中半身至少有一处清楚入镜，干净桌面、手边小物和一点生活痕迹，表达“我现在在这里”的感觉，真实手机照片风格，不要文字。",
             ]
 
         base_prompt = random.choice(candidates)
         current_time = time.strftime("%Y-%m-%d %H:%M")
+        if self._get_proactive_bool("person_visible", True):
+            base_prompt = (
+                f"{base_prompt}\n"
+                "查岗重点：画面里必须能看到本人或本人的一部分，"
+                "可以是半身、侧脸、手部、肩膀、腿部、镜中倒影或拿手机的手；"
+                "不要只拍桌面、物品或空房间。人物穿着日常得体。"
+            )
         return f"{base_prompt}\n当前时间参考：{current_time}。画面不要出现可读文字、水印或二维码。"
 
     def _build_proactive_caption(self) -> str:
