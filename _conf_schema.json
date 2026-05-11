@@ -239,7 +239,7 @@
       "caption_templates": {
         "description": "状态图文案模板",
         "type": "list",
-        "hint": "按你的角色性格填写多条自然口吻文案，每次随机选一句。支持 {activity} 和 {outfit} 占位符。",
+        "hint": "按你的角色性格填写多条自然口吻文案，每次随机选一句。支持 {activity}、{outfit}、{time}、{time_period} 占位符。",
         "default": []
       },
       "person_visible": {
@@ -275,7 +275,7 @@
       "prompt_templates": {
         "description": "状态图提示词模板",
         "type": "list",
-        "hint": "每次随机选一个模板生成状态图；留空使用内置有人入镜的生活感查岗模板。",
+        "hint": "每次随机选一个模板生成状态图；留空使用内置有人入镜的生活感查岗模板。支持 {activity}、{outfit}、{time}、{time_period} 占位符。",
         "default": []
       },
       "max_targets_per_tick": {

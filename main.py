@@ -50,11 +50,11 @@ DEFAULT_VOLC_TTS_RESOURCE_ID = "seed-icl-2.0"
 DEFAULT_VOLC_TTS_VOICE_TYPE = "S_RaFCxn8Q1"
 OLD_PROACTIVE_CAPTION = "给你报备一下我现在的状态。"
 DEFAULT_PROACTIVE_CAPTIONS = [
-    "宝宝，我刚刚在{activity}，给你偷偷看一眼。",
-    "刚才忙着{activity}，突然想起你，就顺手拍给你看。",
-    "不用急着回我，我就是想让你看看我现在在{activity}。",
-    "这一会儿在{activity}，像被你抽查到了一样。",
-    "我没有消失哦，刚刚在{activity}，给你看一下我这边的小现场。",
+    "宝宝，{time_period}我刚刚在{activity}，给你偷偷看一眼。",
+    "{time_period}刚才忙着{activity}，突然想起你，就顺手拍给你看。",
+    "不用急着回我，我就是想让你看看我{time_period}在{activity}。",
+    "{time_period}这一会儿在{activity}，像被你抽查到了一样。",
+    "我没有消失哦，{time_period}刚刚在{activity}，给你看一下我这边的小现场。",
 ]
 
 
@@ -62,7 +62,7 @@ DEFAULT_PROACTIVE_CAPTIONS = [
     PLUGIN_NAME,
     "flaw",
     "通过关键词调用 OpenAI 兼容图片生成接口，根据用户描述生成图片。",
-    "1.1.0",
+    "1.1.1",
 )
 class GptImg2Plugin(Star):
     def __init__(self, context: Context, config: dict[str, Any] | None = None):
@@ -425,14 +425,22 @@ class GptImg2Plugin(Star):
 
         if normalized in {"立即", "现在", "测试", "发一张", "马上"}:
             memory_context = await self._get_memory_context_for_event(event)
+            proactive_context = self._build_proactive_context(memory_context)
             try:
-                image_ref = await self._generate_proactive_status_image(umo)
+                image_ref = await self._generate_proactive_status_image(
+                    umo,
+                    memory_context=memory_context,
+                    proactive_context=proactive_context,
+                )
                 local_image = await self._ensure_local_image_ref(image_ref)
             except Exception as exc:
                 logger.exception("proactive status image immediate generation failed")
                 yield event.plain_result(self._friendly_generation_error(exc, mode="image"))
                 return
-            caption = self._build_proactive_caption(memory_context)
+            caption = self._build_proactive_caption(
+                memory_context,
+                proactive_context=proactive_context,
+            )
             result = event.make_result()
             if caption:
                 result.message(caption)
@@ -735,19 +743,38 @@ class GptImg2Plugin(Star):
                 logger.exception("send proactive status image failed: %s", exc)
 
     async def _send_proactive_status_image(self, umo: str) -> None:
-        image_ref = await self._generate_proactive_status_image(umo)
-        local_image = await self._ensure_local_image_ref(image_ref)
         memory_context = await self._get_memory_context_for_umo(umo)
-        caption = self._build_proactive_caption(memory_context)
+        proactive_context = self._build_proactive_context(memory_context)
+        image_ref = await self._generate_proactive_status_image(
+            umo,
+            memory_context=memory_context,
+            proactive_context=proactive_context,
+        )
+        local_image = await self._ensure_local_image_ref(image_ref)
+        caption = self._build_proactive_caption(
+            memory_context,
+            proactive_context=proactive_context,
+        )
         chain = self._build_active_image_chain(caption, local_image)
         await self.context.send_message(umo, chain)
 
-    async def _generate_proactive_status_image(self, umo: str = "") -> str:
+    async def _generate_proactive_status_image(
+        self,
+        umo: str = "",
+        memory_context: str | None = None,
+        proactive_context: dict[str, str] | None = None,
+    ) -> str:
         api_key = self._get_config_str("api_key") or os.getenv("OPENAI_API_KEY", "")
         if not api_key:
             raise RuntimeError("api_key 未配置")
-        memory_context = await self._get_memory_context_for_umo(umo)
-        prompt = self._build_proactive_status_prompt(memory_context)
+        if memory_context is None:
+            memory_context = await self._get_memory_context_for_umo(umo)
+        if proactive_context is None:
+            proactive_context = self._build_proactive_context(memory_context)
+        prompt = self._build_proactive_status_prompt(
+            memory_context,
+            proactive_context=proactive_context,
+        )
         reference_images = self._get_selfie_reference_images()
         if (
             reference_images
@@ -759,20 +786,27 @@ class GptImg2Plugin(Star):
                     api_key,
                     prompt,
                     reference_images,
+                    memory_context=memory_context,
                 )
             except Exception as exc:
                 logger.exception("proactive status selfie generation failed: %s", exc)
         return await self._generate_image(api_key, prompt)
 
-    def _build_proactive_status_prompt(self, memory_context: str = "") -> str:
+    def _build_proactive_status_prompt(
+        self,
+        memory_context: str = "",
+        proactive_context: dict[str, str] | None = None,
+    ) -> str:
+        if proactive_context is None:
+            proactive_context = self._build_proactive_context(memory_context)
         templates = self._get_proactive_value("prompt_templates", [])
         if isinstance(templates, list):
             candidates = [str(item).strip() for item in templates if str(item).strip()]
         else:
             candidates = []
 
-        activity = self._select_current_activity(memory_context)
-        outfit = self._select_today_outfit(memory_context)
+        activity = proactive_context["activity"]
+        outfit = proactive_context["outfit"]
         if not candidates:
             candidates = [
                 f"真实生活感查岗自拍：本人正在{activity}，像被亲近的人临时问“在干嘛”后随手拍的一张照片，画面自然、不摆拍，手机随拍感，不要文字。",
@@ -781,11 +815,15 @@ class GptImg2Plugin(Star):
                 f"真实生活感自拍：本人正在{activity}，不刻意摆造型，构图像微信里临时发出的近照，真实照片风格，不要文字。",
             ]
 
-        base_prompt = random.choice(candidates)
-        current_time = time.strftime("%Y-%m-%d %H:%M")
+        base_prompt = self._render_context_template(
+            random.choice(candidates),
+            proactive_context,
+        )
         base_prompt = (
             f"{base_prompt}\n"
             f"当前日程/状态：{activity}。"
+            f"\n当前本地时间：{proactive_context['current_time']}（{proactive_context['time_period']}）。"
+            f"\n时间段画面要求：{proactive_context['time_scene']}。"
         )
         if outfit:
             base_prompt = (
@@ -800,7 +838,7 @@ class GptImg2Plugin(Star):
                 "可以是半身、侧脸、手部、肩膀、腿部、镜中倒影或拿手机的手；"
                 "不要只拍桌面、物品或空房间。人物穿着日常得体。"
             )
-        return f"{base_prompt}\n当前时间参考：{current_time}。画面不要出现可读文字、水印或二维码。"
+        return f"{base_prompt}\n画面不要出现可读文字、水印、二维码或具体时间数字。"
 
     def _select_current_activity(self, memory_context: str = "") -> str:
         memory_activity = self._extract_activity_from_memory(memory_context)
@@ -875,7 +913,62 @@ class GptImg2Plugin(Star):
         seed = f"{time.strftime('%Y-%m-%d')}:outfit"
         return random.Random(seed).choice(outfits)
 
-    def _build_proactive_caption(self, memory_context: str = "") -> str:
+    def _build_proactive_context(self, memory_context: str = "") -> dict[str, str]:
+        time_period = self._current_time_period()
+        return {
+            "activity": self._select_current_activity(memory_context),
+            "outfit": self._select_today_outfit(memory_context),
+            "current_time": self._current_time_reference(),
+            "time_period": time_period,
+            "time_scene": self._current_time_scene_instruction(time_period),
+        }
+
+    def _current_time_reference(self) -> str:
+        timezone = time.strftime("%Z").strip()
+        suffix = f" {timezone}" if timezone else ""
+        return f"{time.strftime('%Y-%m-%d %H:%M')}{suffix}"
+
+    def _current_time_period(self) -> str:
+        hour = int(time.strftime("%H"))
+        if 5 <= hour < 8:
+            return "清晨"
+        if 8 <= hour < 11:
+            return "上午"
+        if 11 <= hour < 14:
+            return "中午"
+        if 14 <= hour < 18:
+            return "下午"
+        if 18 <= hour < 22:
+            return "晚上"
+        return "深夜"
+
+    def _current_time_scene_instruction(self, period: str | None = None) -> str:
+        period = period or self._current_time_period()
+        instructions = {
+            "清晨": "光线偏柔和清透，可以有刚起床、收拾东西或准备出门的生活感",
+            "上午": "光线明亮自然，状态像已经开始今天的事情，不要生成夜景或昏暗灯光",
+            "中午": "环境和光线要像午间休息或吃饭前后，避免深夜卧室感",
+            "下午": "光线和场景要符合下午，适合工作、学习、外出或短暂休息的状态",
+            "晚上": "可以有室内暖光、饭后休息或整理东西的氛围，不要像白天强日光",
+            "深夜": "光线应偏安静克制，状态像夜里收尾或准备休息，不要生成白天户外强光",
+        }
+        return instructions.get(period, "画面状态要符合当前本地时间")
+
+    def _render_context_template(self, template: str, context: dict[str, str]) -> str:
+        return (
+            template.replace("{activity}", context.get("activity", "现在的事"))
+            .replace("{outfit}", context.get("outfit") or "今天这身")
+            .replace("{time}", context.get("current_time", "现在"))
+            .replace("{time_period}", context.get("time_period", "这会儿"))
+        )
+
+    def _build_proactive_caption(
+        self,
+        memory_context: str = "",
+        proactive_context: dict[str, str] | None = None,
+    ) -> str:
+        if proactive_context is None:
+            proactive_context = self._build_proactive_context(memory_context)
         templates = self._get_proactive_value("caption_templates", [])
         if isinstance(templates, list):
             candidates = [str(item).strip() for item in templates if str(item).strip()]
@@ -890,10 +983,7 @@ class GptImg2Plugin(Star):
             candidates = DEFAULT_PROACTIVE_CAPTIONS
 
         caption = random.choice(candidates)
-        return (
-            caption.replace("{activity}", self._select_current_activity(memory_context))
-            .replace("{outfit}", self._select_today_outfit(memory_context) or "今天这身")
-        )
+        return self._render_context_template(caption, proactive_context)
 
     async def _get_memory_context_for_umo(self, umo: str) -> str:
         if not umo or self.context is None:
@@ -1006,7 +1096,19 @@ class GptImg2Plugin(Star):
                 continue
             if any(
                 marker in stripped
-                for marker in ("记忆", "事实", "偏好", "日程", "安排", "穿搭", "今天", "现在", "状态")
+                for marker in (
+                    "记忆",
+                    "事实",
+                    "偏好",
+                    "日程",
+                    "安排",
+                    "穿搭",
+                    "衣服",
+                    "搭配",
+                    "今天",
+                    "现在",
+                    "状态",
+                )
             ):
                 lines.append(stripped)
         return "\n".join(lines[-80:])
@@ -1781,6 +1883,16 @@ class GptImg2Plugin(Star):
                 "请明显区别于参考图：换一个新背景、新姿势、新构图和新镜头距离。"
             )
         user_prompt = f"{user_prompt}\n{variety}"
+        activity = self._extract_activity_from_memory(memory_context)
+        if activity:
+            user_prompt = f"{user_prompt}\n根据记忆理解的当前状态/日程：{activity}。"
+        time_period = self._current_time_period()
+        user_prompt = (
+            f"{user_prompt}\n"
+            f"当前本地时间：{self._current_time_reference()}（{time_period}）。"
+            f"自拍的光线、环境和状态要符合这个时间段：{self._current_time_scene_instruction(time_period)}。"
+            "不要在画面里出现可读时间、文字、水印或二维码。"
+        )
         outfit = self._select_today_outfit(memory_context)
         if outfit:
             user_prompt = (
