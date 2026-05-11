@@ -49,7 +49,7 @@ DEFAULT_PROACTIVE_CAPTIONS = [
     PLUGIN_NAME,
     "flaw",
     "通过关键词调用 OpenAI 兼容图片生成接口，根据用户描述生成图片。",
-    "1.0.8",
+    "1.0.9",
 )
 class GptImg2Plugin(Star):
     def __init__(self, context: Context, config: dict[str, Any] | None = None):
@@ -151,6 +151,9 @@ class GptImg2Plugin(Star):
         prompt: str,
         mode: str = "auto",
         ask_first: bool = False,
+        current_state: str = "",
+        today_outfit: str = "",
+        memory_context: str = "",
     ):
         """生成图片或基于自拍参考照生成 Bot 自拍。
 
@@ -159,6 +162,7 @@ class GptImg2Plugin(Star):
         - 用户说“让我看看你”“拍张今天照片”“看看今天穿搭”等，但还没有明确同意看照片：mode=ask_selfie，ask_first=true。
         - 用户已经回复“要看/看看/来一张/好/OK”等确认词：mode=selfie，ask_first=false。
         - 用户在聊 Bot 自己的照片、自拍、穿搭、今天怎么穿：优先使用 selfie，而不是普通文生图。
+        - 如果记忆里有“今天安排/现在在做什么/今日穿搭/偏好”，把整理后的内容放进 current_state、today_outfit 或 memory_context。
         - 如果只是要自然地问用户是否想看，可以直接用你的人设和记忆自然回复；插件已记录待确认自拍意图，用户之后确认时会自动生成。
         - 成功后插件会直接把图片发送给用户，模型不要再伪造图片或描述成已经看过真实照片。
 
@@ -166,8 +170,17 @@ class GptImg2Plugin(Star):
             prompt(string): 图片提示词。自拍模式下写清楚场景、穿搭、光线、姿势。
             mode(string): auto/text/selfie/ask_selfie。auto 会按提示词语义选择。
             ask_first(boolean): true 表示只追问确认并记录待生成提示词，不立即生成。
+            current_state(string): 主 Agent 从记忆中理解出的当前状态/日程，例如“下午在咖啡店看书”。
+            today_outfit(string): 主 Agent 从记忆中理解出的今日穿搭。
+            memory_context(string): 与图片有关的记忆摘要，例如日程、穿搭、偏好、地点。
         """
         prompt = (prompt or "").strip()
+        prompt = self._merge_prompt_with_memory(
+            prompt,
+            current_state=current_state,
+            today_outfit=today_outfit,
+            memory_context=memory_context,
+        )
         resolved_mode = self._resolve_llm_tool_mode(prompt, mode, ask_first)
 
         if resolved_mode == "ask_selfie":
@@ -181,7 +194,9 @@ class GptImg2Plugin(Star):
         if resolved_mode == "selfie":
             try:
                 image_ref = await self._generate_selfie_for_tool(
-                    event, prompt or self._default_selfie_prompt()
+                    event,
+                    prompt or self._default_selfie_prompt(),
+                    memory_context=memory_context,
                 )
             except RuntimeError as exc:
                 yield event.plain_result(str(exc))
@@ -232,7 +247,13 @@ class GptImg2Plugin(Star):
             return
 
         try:
-            image_ref = await self._generate_selfie(api_key, event, prompt)
+            memory_context = await self._get_memory_context_for_event(event)
+            image_ref = await self._generate_selfie(
+                api_key,
+                event,
+                prompt,
+                memory_context=memory_context,
+            )
         except Exception as exc:
             logger.exception("gpt-img-2 selfie generation failed")
             yield event.plain_result(self._friendly_generation_error(exc, mode="selfie"))
@@ -258,7 +279,7 @@ class GptImg2Plugin(Star):
             ) from exc
 
     async def _generate_selfie_for_tool(
-        self, event: AstrMessageEvent, prompt: str
+        self, event: AstrMessageEvent, prompt: str, memory_context: str = ""
     ) -> str:
         if not self._get_selfie_bool("enabled", True):
             raise RuntimeError("自拍参考照功能已关闭")
@@ -268,7 +289,14 @@ class GptImg2Plugin(Star):
             raise RuntimeError("api_key 未配置")
 
         try:
-            return await self._generate_selfie(api_key, event, prompt)
+            if not memory_context:
+                memory_context = await self._get_memory_context_for_event(event)
+            return await self._generate_selfie(
+                api_key,
+                event,
+                prompt,
+                memory_context=memory_context,
+            )
         except Exception as exc:
             logger.exception("gpt-img-2 llm tool selfie generation failed")
             raise RuntimeError(
@@ -341,14 +369,15 @@ class GptImg2Plugin(Star):
             return
 
         if normalized in {"立即", "现在", "测试", "发一张", "马上"}:
+            memory_context = await self._get_memory_context_for_event(event)
             try:
-                image_ref = await self._generate_proactive_status_image()
+                image_ref = await self._generate_proactive_status_image(umo)
                 local_image = await self._ensure_local_image_ref(image_ref)
             except Exception as exc:
                 logger.exception("proactive status image immediate generation failed")
                 yield event.plain_result(self._friendly_generation_error(exc, mode="image"))
                 return
-            caption = self._build_proactive_caption()
+            caption = self._build_proactive_caption(memory_context)
             result = event.make_result()
             if caption:
                 result.message(caption)
@@ -376,7 +405,11 @@ class GptImg2Plugin(Star):
         )
 
     async def _generate_selfie(
-        self, api_key: str, event: AstrMessageEvent, prompt: str
+        self,
+        api_key: str,
+        event: AstrMessageEvent,
+        prompt: str,
+        memory_context: str = "",
     ) -> str:
         reference_images = self._get_selfie_reference_images()
         if not reference_images:
@@ -390,6 +423,7 @@ class GptImg2Plugin(Star):
             prompt,
             reference_images,
             extra_images,
+            memory_context=memory_context,
         )
 
     async def _generate_selfie_with_references(
@@ -398,9 +432,14 @@ class GptImg2Plugin(Star):
         prompt: str,
         reference_images: list[bytes],
         extra_images: list[bytes] | None = None,
+        memory_context: str = "",
     ) -> str:
         extra_images = extra_images or []
-        final_prompt = self._build_selfie_prompt(prompt, extra_refs=len(extra_images))
+        final_prompt = self._build_selfie_prompt(
+            prompt,
+            extra_refs=len(extra_images),
+            memory_context=memory_context,
+        )
         request_images = [*reference_images, *extra_images]
         max_images = self._get_selfie_int("max_reference_images", 2)
         request_images = request_images[: max(1, max_images)]
@@ -641,17 +680,19 @@ class GptImg2Plugin(Star):
                 logger.exception("send proactive status image failed: %s", exc)
 
     async def _send_proactive_status_image(self, umo: str) -> None:
-        image_ref = await self._generate_proactive_status_image()
+        image_ref = await self._generate_proactive_status_image(umo)
         local_image = await self._ensure_local_image_ref(image_ref)
-        caption = self._build_proactive_caption()
+        memory_context = await self._get_memory_context_for_umo(umo)
+        caption = self._build_proactive_caption(memory_context)
         chain = self._build_active_image_chain(caption, local_image)
         await self.context.send_message(umo, chain)
 
-    async def _generate_proactive_status_image(self) -> str:
+    async def _generate_proactive_status_image(self, umo: str = "") -> str:
         api_key = self._get_config_str("api_key") or os.getenv("OPENAI_API_KEY", "")
         if not api_key:
             raise RuntimeError("api_key 未配置")
-        prompt = self._build_proactive_status_prompt()
+        memory_context = await self._get_memory_context_for_umo(umo)
+        prompt = self._build_proactive_status_prompt(memory_context)
         reference_images = self._get_selfie_reference_images()
         if (
             reference_images
@@ -668,15 +709,15 @@ class GptImg2Plugin(Star):
                 logger.exception("proactive status selfie generation failed: %s", exc)
         return await self._generate_image(api_key, prompt)
 
-    def _build_proactive_status_prompt(self) -> str:
+    def _build_proactive_status_prompt(self, memory_context: str = "") -> str:
         templates = self._get_proactive_value("prompt_templates", [])
         if isinstance(templates, list):
             candidates = [str(item).strip() for item in templates if str(item).strip()]
         else:
             candidates = []
 
-        activity = self._select_current_activity()
-        outfit = self._select_today_outfit()
+        activity = self._select_current_activity(memory_context)
+        outfit = self._select_today_outfit(memory_context)
         if not candidates:
             candidates = [
                 f"真实生活感查岗自拍：本人正在{activity}，像被亲近的人临时问“在干嘛”后随手拍的一张照片，画面自然、不摆拍，手机随拍感，不要文字。",
@@ -706,10 +747,10 @@ class GptImg2Plugin(Star):
             )
         return f"{base_prompt}\n当前时间参考：{current_time}。画面不要出现可读文字、水印或二维码。"
 
-    def _select_current_activity(self) -> str:
-        scheduled = self._activity_from_schedule()
-        if scheduled:
-            return scheduled
+    def _select_current_activity(self, memory_context: str = "") -> str:
+        memory_activity = self._extract_activity_from_memory(memory_context)
+        if memory_activity:
+            return memory_activity
 
         configured = self._get_proactive_value("random_activities", [])
         if isinstance(configured, list):
@@ -753,61 +794,13 @@ class GptImg2Plugin(Star):
         seed = f"{time.strftime('%Y-%m-%d-%H')}:activity"
         return random.Random(seed).choice(activities)
 
-    def _activity_from_schedule(self) -> str:
-        items = self._get_proactive_value("schedule_items", [])
-        if not isinstance(items, list):
-            return ""
-
-        now_minutes = int(time.strftime("%H")) * 60 + int(time.strftime("%M"))
-        for item in items:
-            activity = self._parse_schedule_item(item, now_minutes)
-            if activity:
-                return activity
-        return ""
-
-    def _parse_schedule_item(self, item: Any, now_minutes: int) -> str:
-        if isinstance(item, dict):
-            start = str(item.get("start", "")).strip()
-            end = str(item.get("end", "")).strip()
-            activity = str(item.get("activity", "") or item.get("text", "")).strip()
-            if self._time_range_contains(start, end, now_minutes):
-                return activity
-            return ""
-
-        text = str(item).strip()
-        match = re.match(
-            r"^\s*(\d{1,2}:\d{2})\s*[-~到至]\s*(\d{1,2}:\d{2})\s*[:：,，\s]*(.+)$",
-            text,
-        )
-        if not match:
-            return ""
-        start, end, activity = match.groups()
-        if self._time_range_contains(start, end, now_minutes):
-            return activity.strip()
-        return ""
-
-    def _time_range_contains(self, start: str, end: str, now_minutes: int) -> bool:
-        start_minutes = self._parse_clock_minutes(start)
-        end_minutes = self._parse_clock_minutes(end)
-        if start_minutes is None or end_minutes is None:
-            return False
-        if start_minutes <= end_minutes:
-            return start_minutes <= now_minutes < end_minutes
-        return now_minutes >= start_minutes or now_minutes < end_minutes
-
-    def _parse_clock_minutes(self, value: str) -> int | None:
-        match = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", value)
-        if not match:
-            return None
-        hour = int(match.group(1))
-        minute = int(match.group(2))
-        if not (0 <= hour <= 23 and 0 <= minute <= 59):
-            return None
-        return hour * 60 + minute
-
-    def _select_today_outfit(self) -> str:
+    def _select_today_outfit(self, memory_context: str = "") -> str:
         if not self._get_proactive_bool("daily_outfit_enabled", True):
             return ""
+
+        memory_outfit = self._extract_outfit_from_memory(memory_context)
+        if memory_outfit:
+            return memory_outfit
 
         configured = self._get_proactive_value("daily_outfits", [])
         if isinstance(configured, list):
@@ -827,7 +820,7 @@ class GptImg2Plugin(Star):
         seed = f"{time.strftime('%Y-%m-%d')}:outfit"
         return random.Random(seed).choice(outfits)
 
-    def _build_proactive_caption(self) -> str:
+    def _build_proactive_caption(self, memory_context: str = "") -> str:
         templates = self._get_proactive_value("caption_templates", [])
         if isinstance(templates, list):
             candidates = [str(item).strip() for item in templates if str(item).strip()]
@@ -843,9 +836,130 @@ class GptImg2Plugin(Star):
 
         caption = random.choice(candidates)
         return (
-            caption.replace("{activity}", self._select_current_activity())
-            .replace("{outfit}", self._select_today_outfit() or "今天这身")
+            caption.replace("{activity}", self._select_current_activity(memory_context))
+            .replace("{outfit}", self._select_today_outfit(memory_context) or "今天这身")
         )
+
+    async def _get_memory_context_for_umo(self, umo: str) -> str:
+        if not umo or self.context is None:
+            return ""
+
+        chunks: list[str] = []
+        try:
+            manager = getattr(self.context, "conversation_manager", None)
+            if manager is not None:
+                cid = await manager.get_curr_conversation_id(umo)
+                if cid:
+                    conv = await manager.get_conversation(umo, cid)
+                    history = json.loads(getattr(conv, "history", "[]") or "[]")
+                    chunks.extend(self._history_records_to_text(history[-16:]))
+        except Exception as exc:
+            logger.debug("read conversation memory context failed: %s", exc)
+
+        return "\n".join(chunks)[-6000:]
+
+    async def _get_memory_context_for_event(self, event: AstrMessageEvent) -> str:
+        umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        return await self._get_memory_context_for_umo(umo)
+
+    def _merge_prompt_with_memory(
+        self,
+        prompt: str,
+        current_state: str = "",
+        today_outfit: str = "",
+        memory_context: str = "",
+    ) -> str:
+        parts = [prompt.strip()] if prompt.strip() else []
+        current_state = str(current_state or "").strip()
+        today_outfit = str(today_outfit or "").strip()
+        memory_context = str(memory_context or "").strip()
+        if current_state:
+            parts.append(f"根据记忆理解的当前状态/日程：{current_state}")
+        if today_outfit:
+            parts.append(f"根据记忆理解的今日穿搭：{today_outfit}")
+        if memory_context:
+            parts.append(f"相关记忆摘要：{memory_context}")
+        return "\n".join(parts).strip()
+
+    def _history_records_to_text(self, records: list[Any]) -> list[str]:
+        chunks: list[str] = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            role = str(record.get("role", "")).strip()
+            content = self._content_to_text(record.get("content"))
+            if content:
+                chunks.append(f"{role}: {content}")
+        return chunks
+
+    def _content_to_text(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text") or item.get("content")
+                    if text:
+                        parts.append(str(text))
+                elif isinstance(item, str):
+                    parts.append(item)
+            return "\n".join(parts).strip()
+        if isinstance(content, dict):
+            text = content.get("text") or content.get("content")
+            return str(text).strip() if text else ""
+        return ""
+
+    def _extract_activity_from_memory(self, memory_context: str) -> str:
+        text = self._normalize_memory_text(memory_context)
+        if not text:
+            return ""
+
+        patterns = [
+            r"(?:今天|现在|这会儿|目前|待会儿|等下|下午|晚上|早上|中午)[^。！？\n]{0,20}(?:要|会|准备|正在|打算|计划|安排)[^。！？\n]{1,45}",
+            r"(?:日程|安排|计划|行程|状态)[：:，, ]+([^。！？\n]{2,50})",
+            r"(?:在|去|准备去)([^。！？\n]{1,30}(?:上课|上班|看书|学习|工作|吃饭|逛街|散步|买东西|咖啡店|图书馆|学校|公司|房间|卧室|客厅))",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                value = match.group(1) if match.lastindex else match.group(0)
+                return self._clean_memory_fragment(value)
+        return ""
+
+    def _extract_outfit_from_memory(self, memory_context: str) -> str:
+        text = self._normalize_memory_text(memory_context)
+        if not text:
+            return ""
+
+        patterns = [
+            r"(?:今天|今日|这身|现在)[^。！？\n]{0,12}(?:穿搭|穿的是|穿了|衣服|搭配)[：:，, ]*([^。！？\n]{2,80})",
+            r"(?:穿搭|衣服|搭配)[：:，, ]+([^。！？\n]{2,80})",
+            r"((?:米白|奶白|浅粉|粉色|浅蓝|黑色|白色|针织|开衫|吊带|裙|牛仔|衬衫|卫衣|短袜|玛丽珍)[^。！？\n]{2,80})",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return self._clean_memory_fragment(match.group(1))
+        return ""
+
+    def _normalize_memory_text(self, memory_context: str) -> str:
+        lines = []
+        for line in memory_context.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if any(
+                marker in stripped
+                for marker in ("记忆", "事实", "偏好", "日程", "安排", "穿搭", "今天", "现在", "状态")
+            ):
+                lines.append(stripped)
+        return "\n".join(lines[-80:])
+
+    def _clean_memory_fragment(self, value: str) -> str:
+        value = re.sub(r"^(user|assistant|system)\s*:\s*", "", value.strip(), flags=re.I)
+        value = re.sub(r"[，,。！？!?\s]+$", "", value)
+        return value[:90]
 
     async def _ensure_local_image_ref(self, image_ref: str) -> str:
         if not image_ref.startswith(("http://", "https://")):
@@ -1291,7 +1405,9 @@ class GptImg2Plugin(Star):
             text = text[len("base64://") :]
         return base64.b64decode(text, validate=False)
 
-    def _build_selfie_prompt(self, prompt: str, extra_refs: int) -> str:
+    def _build_selfie_prompt(
+        self, prompt: str, extra_refs: int, memory_context: str = ""
+    ) -> str:
         prefix = self._get_selfie_str("prompt_prefix", "")
         if not prefix:
             identity_strength = self._get_selfie_str("identity_strength", "balanced")
@@ -1313,7 +1429,7 @@ class GptImg2Plugin(Star):
                 "请明显区别于参考图：换一个新背景、新姿势、新构图和新镜头距离。"
             )
         user_prompt = f"{user_prompt}\n{variety}"
-        outfit = self._select_today_outfit()
+        outfit = self._select_today_outfit(memory_context)
         if outfit:
             user_prompt = (
                 f"{user_prompt}\n"

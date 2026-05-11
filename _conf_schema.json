@@ -126,21 +126,15 @@
         "default": true
       },
       "daily_outfits": {
-        "description": "今日穿搭候选",
+        "description": "今日穿搭兜底候选",
         "type": "list",
-        "hint": "可填写多套角色常穿搭配。插件每天固定随机选择一套，主动状态图和自拍都会尽量沿用。",
-        "default": []
-      },
-      "schedule_items": {
-        "description": "日程安排",
-        "type": "list",
-        "hint": "按“09:00-11:30 在咖啡店看书”格式填写。当前时间命中日程时，主动状态图会按该日程生成。",
+        "hint": "记忆里没有今日穿搭时才使用。插件每天固定随机选择一套，主动状态图和自拍都会尽量沿用。",
         "default": []
       },
       "random_activities": {
-        "description": "随机状态候选",
+        "description": "随机状态兜底候选",
         "type": "list",
-        "hint": "没有命中日程时，从这里随机选择正在做什么；留空则按早上/中午/下午/晚上/深夜使用内置状态。",
+        "hint": "记忆里没有当前状态/日程时才使用；留空则按早上/中午/下午/晚上/深夜使用内置状态。",
         "default": []
       },
       "prompt_templates": {
