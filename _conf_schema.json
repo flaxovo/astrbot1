@@ -81,7 +81,7 @@
         "description": "火山 App ID",
         "type": "string",
         "hint": "火山引擎语音合成 App ID。也可用环境变量 VOLC_TTS_APP_ID。",
-        "default": ""
+        "default": "9694280449"
       },
       "access_token": {
         "description": "火山 Access Token",

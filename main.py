@@ -43,6 +43,7 @@ DEFAULT_MODEL = "gpt-image-2"
 DEFAULT_VOLC_TTS_BASE_URL = "https://openspeech.bytedance.com"
 DEFAULT_VOLC_TTS_ENDPOINT = "/api/v1/tts"
 DEFAULT_VOLC_TTS_CLUSTER = "volcano_tts"
+DEFAULT_VOLC_TTS_APP_ID = "9694280449"
 DEFAULT_VOLC_TTS_VOICE_TYPE = "S_RaFCxn8Q1"
 OLD_PROACTIVE_CAPTION = "给你报备一下我现在的状态。"
 DEFAULT_PROACTIVE_CAPTIONS = [
@@ -1045,7 +1046,9 @@ class GptImg2Plugin(Star):
         if not self._get_tts_bool("enabled", True):
             raise RuntimeError("语音合成功能暂时关着。")
 
-        app_id = self._get_tts_str("app_id") or os.getenv("VOLC_TTS_APP_ID", "")
+        app_id = self._get_tts_str("app_id") or os.getenv(
+            "VOLC_TTS_APP_ID", DEFAULT_VOLC_TTS_APP_ID
+        )
         access_token = self._get_tts_str("access_token") or os.getenv(
             "VOLC_TTS_ACCESS_TOKEN", ""
         )

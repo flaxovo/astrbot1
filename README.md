@@ -42,9 +42,9 @@ AstrBot 图片生成插件。用户发送关键词和图片描述后，插件会
 | `natural_image_enabled` | 是否启用自然语言文生图触发，默认开启。 |
 | `extra_body` | 额外请求体参数，用于兼容不同服务商。 |
 | `tts.enabled` | 是否启用火山语音合成，默认开启。 |
-| `tts.app_id` | 火山语音合成 App ID，也可用环境变量 `VOLC_TTS_APP_ID`。 |
-| `tts.access_token` | 火山语音合成 Access Token，也可用环境变量 `VOLC_TTS_ACCESS_TOKEN`。 |
-| `tts.secret_key` | 火山 Secret Key 预留字段，当前 HTTP 合成路径不需要。 |
+| `tts.app_id` | 火山语音合成 App ID，默认 `9694280449`，也可用环境变量 `VOLC_TTS_APP_ID`。 |
+| `tts.access_token` | 火山语音合成 Access Token，也可用环境变量 `VOLC_TTS_ACCESS_TOKEN`，不要提交到 git。 |
+| `tts.secret_key` | 火山 Secret Key 预留字段，当前 HTTP 合成路径不需要；如填写也不要提交到 git。 |
 | `tts.voice_type` | 音色 ID，默认 `S_RaFCxn8Q1`。 |
 | `tts.cluster` | 火山语音集群，默认 `volcano_tts`，如控制台给了其它值可修改。 |
 | `tts.encoding` | 音频格式，默认 `mp3`。 |
