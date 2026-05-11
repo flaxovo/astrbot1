@@ -145,6 +145,18 @@
         "hint": "建议 mp3；部分平台可能会自行转换语音格式。",
         "default": "mp3"
       },
+      "send_mode": {
+        "description": "语音发送模式",
+        "type": "string",
+        "hint": "auto=自动判断；record=强制语音段；file=强制文件兜底。微信 OC/个人微信通常不支持语音段，auto 会走文件兜底。",
+        "default": "auto"
+      },
+      "send_file_fallback": {
+        "description": "启用文件兜底",
+        "type": "bool",
+        "hint": "当平台不支持语音段时，发送文本+mp3 文件；关闭后只发文本和本地路径。",
+        "default": true
+      },
       "sample_rate": {
         "description": "采样率",
         "type": "int",

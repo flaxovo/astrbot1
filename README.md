@@ -50,6 +50,8 @@ AstrBot 图片生成插件。用户发送关键词和图片描述后，插件会
 | `tts.resource_id` | V3 Resource ID，默认 `seed-icl-2.0`。 |
 | `tts.cluster` | V1 集群，默认 `volcano_tts`，仅 `api_version=v1` 时使用。 |
 | `tts.encoding` | 音频格式，默认 `mp3`。 |
+| `tts.send_mode` | 语音发送模式，默认 `auto`；微信 OC/个人微信会自动走文件兜底。 |
+| `tts.send_file_fallback` | 平台不支持语音段时发送文本+mp3 文件，默认开启。 |
 | `tts.sample_rate` | V3 采样率，默认 `24000`。 |
 | `tts.speed_ratio` / `tts.volume_ratio` / `tts.pitch_ratio` | 语速、音量、音调，默认 `1.0`。 |
 | `proactive.enabled` | 是否启用主动状态图后台任务，默认关闭。 |
@@ -119,6 +121,8 @@ AstrBot 图片生成插件。用户发送关键词和图片描述后，插件会
 ```
 
 语音合成默认使用火山 V3 HTTP 单向接口。`S_` 开头的声音复刻音色通常需要 `resource_id=seed-icl-2.0`；如果你使用旧版音色，可以把 `tts.api_version` 改成 `v1` 并按控制台填写 `cluster`。凭据只应写在 AstrBot 配置或环境变量里，不要提交到 git。
+
+微信 OC/个人微信适配器可能不支持 AstrBot `Record` 语音段；默认 `tts.send_mode=auto` 会把语音改成文本+mp3 文件兜底，避免出现 `outbound message ignored, no supported segments`。
 
 3. 查看或删除参考照：
 

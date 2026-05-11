@@ -24,8 +24,9 @@ except Exception:
     MessageChain = None
 
 try:
-    from astrbot.core.message.components import Record
+    from astrbot.core.message.components import File, Record
 except Exception:
+    File = None
     Record = None
 
 try:
@@ -248,7 +249,7 @@ class GptImg2Plugin(Star):
         except RuntimeError as exc:
             yield event.plain_result(str(exc))
             return
-        yield self._record_result(event, audio_path, text=text)
+        yield self._voice_result(event, audio_path, text=text)
 
     async def _handle_generation(self, event: AstrMessageEvent, prompt: str):
         event.stop_event()
@@ -286,7 +287,7 @@ class GptImg2Plugin(Star):
             yield event.plain_result(str(exc))
             return
 
-        yield self._record_result(event, audio_path, text=text)
+        yield self._voice_result(event, audio_path, text=text)
 
     async def _handle_selfie(self, event: AstrMessageEvent, prompt: str):
         event.stop_event()
@@ -1034,15 +1035,46 @@ class GptImg2Plugin(Star):
         chain.file_image(image_path)
         return chain
 
-    def _record_result(self, event: AstrMessageEvent, audio_path: str, text: str = "") -> Any:
+    def _voice_result(self, event: AstrMessageEvent, audio_path: str, text: str = "") -> Any:
+        if self._should_send_voice_as_file(event):
+            return self._voice_file_fallback_result(event, audio_path, text)
+
         if Record is None:
-            if text:
-                return event.plain_result(text)
-            return event.plain_result("语音已经合成好了，但当前 AstrBot 环境不支持发送语音组件。")
+            return self._voice_file_fallback_result(event, audio_path, text)
 
         result = event.make_result()
         result.chain.append(Record.fromFileSystem(audio_path, text=text))
         return result
+
+    def _voice_file_fallback_result(
+        self, event: AstrMessageEvent, audio_path: str, text: str = ""
+    ) -> Any:
+        filename = Path(audio_path).name
+        message = text or "语音合成好了。"
+
+        if File is not None and self._get_tts_bool("send_file_fallback", True):
+            result = event.make_result()
+            result.message(message)
+            result.chain.append(File(name=filename, file=audio_path))
+            return result
+
+        return event.plain_result(f"{message}\n语音文件：{audio_path}")
+
+    def _should_send_voice_as_file(self, event: AstrMessageEvent) -> bool:
+        mode = self._get_tts_str("send_mode", "auto").lower()
+        if mode in {"record", "voice", "语音"}:
+            return False
+        if mode in {"file", "文件", "text", "文本"}:
+            return True
+
+        platform_id = ""
+        try:
+            platform_id = str(event.get_platform_id() or "").lower()
+        except Exception:
+            platform_id = ""
+
+        umo = str(getattr(event, "unified_msg_origin", "") or "").lower()
+        return "weixin_oc" in platform_id or "weixin_oc" in umo or "weixin_personal" in umo
 
     async def _generate_tts_audio(self, text: str) -> str:
         if not self._get_tts_bool("enabled", True):
