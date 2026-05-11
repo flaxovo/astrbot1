@@ -5,6 +5,7 @@ import base64
 import json
 import mimetypes
 import os
+import random
 import re
 import time
 import urllib.error
@@ -16,6 +17,11 @@ from typing import Any
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
+
+try:
+    from astrbot.api.event import MessageChain
+except Exception:
+    MessageChain = None
 
 try:
     from astrbot.core.utils.astrbot_path import get_astrbot_data_path
@@ -47,12 +53,17 @@ class GptImg2Plugin(Star):
             self.data_dir = Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME
         self.output_dir = self.data_dir / "generated"
         self.selfie_ref_dir = self.data_dir / "selfie_refs"
+        self.proactive_targets_path = self.data_dir / "proactive_targets.json"
         self._recent_images_by_user: dict[str, tuple[float, list[bytes]]] = {}
         self._pending_selfie_confirm: dict[str, tuple[float, str]] = {}
+        self._proactive_task: asyncio.Task | None = None
 
     async def initialize(self):
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.selfie_ref_dir.mkdir(parents=True, exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        if self._proactive_is_active():
+            self._proactive_task = asyncio.create_task(self._proactive_loop())
 
     @filter.command("gptimg", alias=["画图", "绘图", "生成图片", "gpt-img-2"])
     async def gptimg(self, event: AstrMessageEvent):
@@ -116,6 +127,13 @@ class GptImg2Plugin(Star):
         """管理自拍参考照。用法：发送图片 + /自拍参考 设置"""
         action = self._extract_command_prompt(event).strip()
         async for result in self._handle_selfie_reference(event, action):
+            yield result
+
+    @filter.command("状态图")
+    async def proactive_status_image(self, event: AstrMessageEvent):
+        """管理主动状态图。用法：/状态图 开启、/状态图 关闭、/状态图 立即"""
+        action = self._extract_named_command_prompt(event, "状态图").strip()
+        async for result in self._handle_proactive_status_command(event, action):
             yield result
 
     @filter.llm_tool(name="gpt_img_2_generate")
@@ -284,6 +302,58 @@ class GptImg2Plugin(Star):
 
         yield event.plain_result(
             "自拍参考照用法：发送图片 + /自拍参考 设置；/自拍参考 查看；/自拍参考 删除；/自拍 日常自拍照，窗边自然光。"
+        )
+
+    async def _handle_proactive_status_command(
+        self, event: AstrMessageEvent, action: str
+    ):
+        event.stop_event()
+        normalized = action.strip() or "帮助"
+        umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+
+        if normalized in {"开启", "订阅", "打开", "enable", "on"}:
+            if not umo:
+                yield event.plain_result("这个会话暂时拿不到发送地址，没法开启主动状态图。")
+                return
+            targets = self._load_saved_proactive_targets()
+            if umo not in targets:
+                targets.append(umo)
+                self._save_proactive_targets(targets)
+            self._ensure_proactive_task()
+            interval = self._get_proactive_int("interval_seconds", 3600)
+            yield event.plain_result(f"好，我会隔一段时间给你发状态图。当前间隔大约 {interval} 秒。")
+            return
+
+        if normalized in {"关闭", "取消", "停用", "disable", "off"}:
+            targets = [target for target in self._load_saved_proactive_targets() if target != umo]
+            self._save_proactive_targets(targets)
+            yield event.plain_result("好，我先不主动发状态图了。")
+            return
+
+        if normalized in {"立即", "现在", "测试", "发一张", "马上"}:
+            try:
+                image_ref = await self._generate_proactive_status_image()
+            except Exception as exc:
+                logger.exception("proactive status image immediate generation failed")
+                yield event.plain_result(self._friendly_generation_error(exc, mode="image"))
+                return
+            caption = self._get_proactive_str("caption", "给你报备一下我现在的状态。")
+            if caption:
+                yield event.plain_result(caption)
+            yield event.image_result(image_ref)
+            return
+
+        if normalized in {"状态", "查看", "status"}:
+            targets = self._get_proactive_targets()
+            interval = self._get_proactive_int("interval_seconds", 3600)
+            enabled = self._get_proactive_bool("enabled", False)
+            yield event.plain_result(
+                f"主动状态图：配置开关={'开' if enabled else '关'}，间隔={interval} 秒，目标会话={len(targets)} 个。"
+            )
+            return
+
+        yield event.plain_result(
+            "状态图用法：/状态图 开启、/状态图 关闭、/状态图 立即、/状态图 状态。"
         )
 
     async def _generate_image(self, api_key: str, prompt: str) -> str:
@@ -516,6 +586,119 @@ class GptImg2Plugin(Star):
         if base.endswith("/v1") and path.startswith("v1/"):
             path = path[3:]
         return f"{base}/{path}"
+
+    async def _proactive_loop(self) -> None:
+        initial_delay = max(0, self._get_proactive_int("initial_delay_seconds", 300))
+        if initial_delay:
+            await asyncio.sleep(initial_delay)
+
+        while True:
+            interval = max(60, self._get_proactive_int("interval_seconds", 3600))
+            await self._run_proactive_tick()
+            await asyncio.sleep(interval)
+
+    async def _run_proactive_tick(self) -> None:
+        if not self._proactive_is_active():
+            return
+
+        targets = self._get_proactive_targets()
+        if not targets:
+            return
+
+        max_targets = max(1, self._get_proactive_int("max_targets_per_tick", 5))
+        for umo in targets[:max_targets]:
+            try:
+                await self._send_proactive_status_image(umo)
+            except Exception as exc:
+                logger.exception("send proactive status image failed: %s", exc)
+
+    async def _send_proactive_status_image(self, umo: str) -> None:
+        image_ref = await self._generate_proactive_status_image()
+        local_image = await self._ensure_local_image_ref(image_ref)
+        caption = self._get_proactive_str("caption", "给你报备一下我现在的状态。")
+        chain = self._build_active_image_chain(caption, local_image)
+        await self.context.send_message(umo, chain)
+
+    async def _generate_proactive_status_image(self) -> str:
+        api_key = self._get_config_str("api_key") or os.getenv("OPENAI_API_KEY", "")
+        if not api_key:
+            raise RuntimeError("api_key 未配置")
+        prompt = self._build_proactive_status_prompt()
+        return await self._generate_image(api_key, prompt)
+
+    def _build_proactive_status_prompt(self) -> str:
+        templates = self._get_proactive_value("prompt_templates", [])
+        if isinstance(templates, list):
+            candidates = [str(item).strip() for item in templates if str(item).strip()]
+        else:
+            candidates = []
+
+        if not candidates:
+            candidates = [
+                "真实生活感状态报备照片：桌边放着打开的电脑、半杯饮料和随手写下的便签，像刚忙完一小段事情发给亲近的人看的照片，温柔自然，手机随拍感，不要文字。",
+                "真实生活感状态报备照片：窗边自然光，一本摊开的书、耳机和手机放在桌上，氛围安静，像在认真做自己的事，手机随拍，不要文字。",
+                "真实生活感状态报备照片：夜晚暖灯下的桌面，屏幕微亮，旁边有小零食和水杯，像在熬夜处理事情时给恋人报备，真实自然，不要文字。",
+                "真实生活感状态报备照片：室内柔和光线，干净桌面、手边小物和一点生活痕迹，表达“我现在在这里”的感觉，真实手机照片风格，不要文字。",
+            ]
+
+        base_prompt = random.choice(candidates)
+        current_time = time.strftime("%Y-%m-%d %H:%M")
+        return f"{base_prompt}\n当前时间参考：{current_time}。画面不要出现可读文字、水印或二维码。"
+
+    async def _ensure_local_image_ref(self, image_ref: str) -> str:
+        if not image_ref.startswith(("http://", "https://")):
+            return image_ref
+        image_bytes = await asyncio.to_thread(self._download_image_bytes, image_ref)
+        ext = self._guess_image_ext(image_bytes)
+        path = self.output_dir / f"proactive_{uuid.uuid4().hex}.{ext}"
+        path.write_bytes(image_bytes)
+        return str(path)
+
+    def _build_active_image_chain(self, caption: str, image_path: str) -> Any:
+        if MessageChain is None:
+            raise RuntimeError("当前 AstrBot 环境不支持 MessageChain 主动发送")
+
+        chain = MessageChain()
+        if caption:
+            chain.message(caption)
+        chain.file_image(image_path)
+        return chain
+
+    def _ensure_proactive_task(self) -> None:
+        if self._proactive_task is None or self._proactive_task.done():
+            self._proactive_task = asyncio.create_task(self._proactive_loop())
+
+    def _proactive_is_active(self) -> bool:
+        return self._get_proactive_bool("enabled", False) or bool(
+            self._load_saved_proactive_targets()
+        )
+
+    def _get_proactive_targets(self) -> list[str]:
+        targets: list[str] = []
+        configured = self._get_proactive_value("targets", [])
+        if isinstance(configured, list):
+            targets.extend(str(item).strip() for item in configured if str(item).strip())
+        targets.extend(self._load_saved_proactive_targets())
+        return list(dict.fromkeys(targets))
+
+    def _load_saved_proactive_targets(self) -> list[str]:
+        if not self.proactive_targets_path.exists():
+            return []
+        try:
+            data = json.loads(self.proactive_targets_path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        if not isinstance(data, list):
+            return []
+        return [str(item).strip() for item in data if str(item).strip()]
+
+    def _save_proactive_targets(self, targets: list[str]) -> None:
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        unique_targets = list(dict.fromkeys(str(item).strip() for item in targets if str(item).strip()))
+        self.proactive_targets_path.write_text(
+            json.dumps(unique_targets, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     async def _save_selfie_reference_from_event(self, event: AstrMessageEvent) -> int:
         images = await self._extract_event_image_bytes(event)
@@ -962,6 +1145,18 @@ class GptImg2Plugin(Star):
                 return parts[1].strip()
         return message
 
+    def _extract_named_command_prompt(self, event: AstrMessageEvent, command: str) -> str:
+        message = event.message_str.strip()
+        for prefix in (f"/{command}", command):
+            if message.startswith(prefix):
+                return message[len(prefix) :].strip()
+        if message.startswith("/"):
+            parts = message.split(maxsplit=1)
+            if len(parts) == 2:
+                return parts[1].strip()
+            return ""
+        return message
+
     def _matches_keyword(self, message: str) -> bool:
         return self._split_keyword_prompt(message) is not None
 
@@ -1092,6 +1287,34 @@ class GptImg2Plugin(Star):
             return value.strip().lower() in {"1", "true", "yes", "on", "开启", "是"}
         return bool(value)
 
+    def _get_proactive_config(self) -> dict[str, Any]:
+        value = self.config.get("proactive", {})
+        return value if isinstance(value, dict) else {}
+
+    def _get_proactive_value(self, key: str, default: Any = None) -> Any:
+        return self._get_proactive_config().get(key, default)
+
+    def _get_proactive_str(self, key: str, default: str = "") -> str:
+        value = self._get_proactive_value(key, default)
+        if value is None:
+            return default
+        return str(value).strip()
+
+    def _get_proactive_int(self, key: str, default: int) -> int:
+        value = self._get_proactive_value(key, default)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _get_proactive_bool(self, key: str, default: bool) -> bool:
+        value = self._get_proactive_value(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "开启", "是"}
+        return bool(value)
+
     def _extension_for_format(self, output_format: str) -> str:
         mime_type = f"image/{output_format}"
         extension = mimetypes.guess_extension(mime_type)
@@ -1140,4 +1363,9 @@ class GptImg2Plugin(Star):
         return "这次图片没生成好，我换个方式再试会更稳。"
 
     async def terminate(self):
-        pass
+        if self._proactive_task is not None:
+            self._proactive_task.cancel()
+            try:
+                await self._proactive_task
+            except asyncio.CancelledError:
+                pass

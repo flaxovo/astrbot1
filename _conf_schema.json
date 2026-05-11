@@ -67,6 +67,54 @@
     "items": {},
     "default": {}
   },
+  "proactive": {
+    "description": "主动状态图",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用主动状态图",
+        "type": "bool",
+        "hint": "开启后，插件会按间隔向订阅会话主动发送状态图。仍需要在目标聊天里执行 /状态图 开启。",
+        "default": false
+      },
+      "interval_seconds": {
+        "description": "发送间隔",
+        "type": "int",
+        "hint": "单位：秒。默认 3600，即 1 小时。代码会强制不低于 60 秒。",
+        "default": 3600
+      },
+      "initial_delay_seconds": {
+        "description": "启动后延迟",
+        "type": "int",
+        "hint": "插件加载后延迟多久再开始第一次后台检查，避免刚重载就发图。",
+        "default": 300
+      },
+      "targets": {
+        "description": "固定目标会话",
+        "type": "list",
+        "hint": "可手动填写 unified_msg_origin；更推荐在聊天里使用 /状态图 开启 自动保存。",
+        "default": []
+      },
+      "caption": {
+        "description": "状态图附带文字",
+        "type": "string",
+        "hint": "主动发送图片前附带的一句话。",
+        "default": "给你报备一下我现在的状态。"
+      },
+      "prompt_templates": {
+        "description": "状态图提示词模板",
+        "type": "list",
+        "hint": "每次随机选一个模板生成状态图；留空使用内置生活感报备模板。",
+        "default": []
+      },
+      "max_targets_per_tick": {
+        "description": "单次最多发送目标数",
+        "type": "int",
+        "hint": "避免一次性给太多会话发图。",
+        "default": 5
+      }
+    }
+  },
   "selfie": {
     "description": "自拍参考照模式",
     "type": "object",
