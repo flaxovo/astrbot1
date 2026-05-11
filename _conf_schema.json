@@ -54,6 +54,12 @@
     "hint": "用户可直接发送“画图 描述”触发。斜杠命令固定支持 /gptimg、/画图、/绘图、/生成图片、/gpt-img-2。",
     "default": ["画图", "绘图", "生成图片", "gptimg", "gpt-img-2"]
   },
+  "natural_image_enabled": {
+    "description": "自然语言文生图触发",
+    "type": "bool",
+    "hint": "开启后，“帮我生成一个xxx图片”“我要一张xxx图”“我想看烟花”等会直接生成普通图片。",
+    "default": true
+  },
   "extra_body": {
     "description": "额外请求体参数",
     "type": "object",

@@ -5,6 +5,7 @@ import base64
 import json
 import mimetypes
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -87,6 +88,12 @@ class GptImg2Plugin(Star):
                 yield event.plain_result(
                     self._build_selfie_confirmation_message(natural_selfie_prompt)
                 )
+            return
+
+        natural_image_prompt = self._build_natural_image_prompt(message)
+        if natural_image_prompt:
+            async for result in self._handle_generation(event, natural_image_prompt):
+                yield result
             return
 
         if not self._matches_keyword(message):
@@ -697,6 +704,54 @@ class GptImg2Plugin(Star):
             return self._default_selfie_prompt()
         return ""
 
+    def _build_natural_image_prompt(self, message: str) -> str:
+        if not self._get_config_bool("natural_image_enabled", True):
+            return ""
+
+        text = self._normalize_chat_request_text(message)
+        if not text:
+            return ""
+
+        trigger_patterns = (
+            r"(?:帮我|给我|替我|麻烦你)?(?:生成|画|绘制|做|整)(?:一张|一个|张|个)?(?P<prompt>.+)",
+            r"(?:帮我|给我|替我|麻烦你)?(?:来一张|来张|整一张|整张)(?P<prompt>.+)",
+            r"(?:我想要|想要|我要)(?:一张|一个|张|个)?(?P<prompt>.+)",
+            r"(?:我想看|想看|想看看)(?P<prompt>.+)",
+        )
+
+        for pattern in trigger_patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            prompt = self._clean_natural_image_prompt(match.group("prompt"))
+            if self._is_valid_natural_image_prompt(prompt):
+                return prompt
+        return ""
+
+    def _normalize_chat_request_text(self, message: str) -> str:
+        text = re.sub(r"\s+", "", message.strip())
+        text = re.sub(r"^(宝宝|宝贝|亲爱的|老婆|老公|bot|机器人)[，,。.!！?？]*", "", text)
+        return text
+
+    def _clean_natural_image_prompt(self, value: str) -> str:
+        text = value.strip()
+        text = re.sub(r"^(一张|一个|张|个|幅|一幅)", "", text)
+        text = re.sub(r"(好吗|好不好|可以吗|行吗|可不可以|吗|嘛|吧|呗|呀|啦|呢)[。.!！?？]*$", "", text)
+        text = re.sub(r"(的)?(图片|图像|图|照片|壁纸|头像|海报)$", "", text)
+        text = text.strip(" ，,。.!！?？：:")
+        return text
+
+    def _is_valid_natural_image_prompt(self, prompt: str) -> bool:
+        if not prompt:
+            return False
+        if len(prompt) > 160:
+            return False
+        if prompt in {"你", "你自己", "你的", "照片", "图片", "图"}:
+            return False
+        if any(marker in prompt for marker in ("看看你", "你的照片", "你的自拍", "你长什么样")):
+            return False
+        return True
+
     def _resolve_llm_tool_mode(
         self, prompt: str, mode: str, ask_first: bool
     ) -> str:
@@ -960,6 +1015,14 @@ class GptImg2Plugin(Star):
             return int(value)
         except (TypeError, ValueError):
             return default
+
+    def _get_config_bool(self, key: str, default: bool) -> bool:
+        value = self.config.get(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "开启", "是"}
+        return bool(value)
 
     def _resolve_size(self, prompt: str, configured_size: str) -> str:
         size = str(configured_size or "").strip().lower()
