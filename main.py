@@ -35,13 +35,21 @@ DEFAULT_BASE_URL = "https://api.xbyjs.top"
 DEFAULT_ENDPOINT = "/v1/images/generations"
 DEFAULT_EDIT_ENDPOINT = "/v1/images/edits"
 DEFAULT_MODEL = "gpt-image-2"
+OLD_PROACTIVE_CAPTION = "给你报备一下我现在的状态。"
+DEFAULT_PROACTIVE_CAPTIONS = [
+    "宝宝，我这边刚好停了一下，给你偷偷看一眼。",
+    "刚刚在忙这个，突然想起你，就顺手拍给你看。",
+    "不用急着回我，我就是想让你看看我现在在干嘛。",
+    "这一会儿大概是这样，像被你抽查到了一样。",
+    "我没有消失哦，给你看一下我这边的小现场。",
+]
 
 
 @register(
     PLUGIN_NAME,
     "flaw",
     "通过关键词调用 OpenAI 兼容图片生成接口，根据用户描述生成图片。",
-    "1.0.0",
+    "1.0.5",
 )
 class GptImg2Plugin(Star):
     def __init__(self, context: Context, config: dict[str, Any] | None = None):
@@ -321,7 +329,9 @@ class GptImg2Plugin(Star):
                 self._save_proactive_targets(targets)
             self._ensure_proactive_task()
             interval = self._get_proactive_int("interval_seconds", 3600)
-            yield event.plain_result(f"好，我会隔一段时间给你发状态图。当前间隔大约 {interval} 秒。")
+            yield event.plain_result(
+                f"好呀，那我隔一段时间就偷偷给你发一张。现在大概 {interval} 秒一次。"
+            )
             return
 
         if normalized in {"关闭", "取消", "停用", "disable", "off"}:
@@ -337,7 +347,7 @@ class GptImg2Plugin(Star):
                 logger.exception("proactive status image immediate generation failed")
                 yield event.plain_result(self._friendly_generation_error(exc, mode="image"))
                 return
-            caption = self._get_proactive_str("caption", "给你报备一下我现在的状态。")
+            caption = self._build_proactive_caption()
             if caption:
                 yield event.plain_result(caption)
             yield event.image_result(image_ref)
@@ -615,7 +625,7 @@ class GptImg2Plugin(Star):
     async def _send_proactive_status_image(self, umo: str) -> None:
         image_ref = await self._generate_proactive_status_image()
         local_image = await self._ensure_local_image_ref(image_ref)
-        caption = self._get_proactive_str("caption", "给你报备一下我现在的状态。")
+        caption = self._build_proactive_caption()
         chain = self._build_active_image_chain(caption, local_image)
         await self.context.send_message(umo, chain)
 
@@ -644,6 +654,22 @@ class GptImg2Plugin(Star):
         base_prompt = random.choice(candidates)
         current_time = time.strftime("%Y-%m-%d %H:%M")
         return f"{base_prompt}\n当前时间参考：{current_time}。画面不要出现可读文字、水印或二维码。"
+
+    def _build_proactive_caption(self) -> str:
+        templates = self._get_proactive_value("caption_templates", [])
+        if isinstance(templates, list):
+            candidates = [str(item).strip() for item in templates if str(item).strip()]
+        else:
+            candidates = []
+
+        fixed_caption = self._get_proactive_str("caption", "")
+        if fixed_caption and fixed_caption != OLD_PROACTIVE_CAPTION:
+            candidates.append(fixed_caption)
+
+        if not candidates:
+            candidates = DEFAULT_PROACTIVE_CAPTIONS
+
+        return random.choice(candidates)
 
     async def _ensure_local_image_ref(self, image_ref: str) -> str:
         if not image_ref.startswith(("http://", "https://")):

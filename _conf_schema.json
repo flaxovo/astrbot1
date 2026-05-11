@@ -96,10 +96,16 @@
         "default": []
       },
       "caption": {
-        "description": "状态图附带文字",
+        "description": "固定状态图文案",
         "type": "string",
-        "hint": "主动发送图片前附带的一句话。",
-        "default": "给你报备一下我现在的状态。"
+        "hint": "主动发送图片前附带的固定一句话。留空则从 caption_templates 或内置角色口吻文案中随机选择。",
+        "default": ""
+      },
+      "caption_templates": {
+        "description": "状态图文案模板",
+        "type": "list",
+        "hint": "按你的角色性格填写多条自然口吻文案，每次主动状态图随机选一句。留空使用内置亲近随手发图口吻。",
+        "default": []
       },
       "prompt_templates": {
         "description": "状态图提示词模板",
