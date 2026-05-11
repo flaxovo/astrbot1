@@ -67,6 +67,105 @@
     "items": {},
     "default": {}
   },
+  "tts": {
+    "description": "火山语音合成",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用语音合成",
+        "type": "bool",
+        "hint": "开启后支持 /语音、/tts、/说话 和 LLM 工具 gpt_img_2_speak。",
+        "default": true
+      },
+      "app_id": {
+        "description": "火山 App ID",
+        "type": "string",
+        "hint": "火山引擎语音合成 App ID。也可用环境变量 VOLC_TTS_APP_ID。",
+        "default": ""
+      },
+      "access_token": {
+        "description": "火山 Access Token",
+        "type": "string",
+        "hint": "火山引擎语音合成 Access Token。也可用环境变量 VOLC_TTS_ACCESS_TOKEN。",
+        "obvious_hint": true,
+        "default": ""
+      },
+      "secret_key": {
+        "description": "火山 Secret Key",
+        "type": "string",
+        "hint": "预留给火山 V3 鉴权使用；当前无额外依赖的 HTTP 合成路径不需要它。",
+        "obvious_hint": true,
+        "default": ""
+      },
+      "base_url": {
+        "description": "火山接口 Base URL",
+        "type": "string",
+        "hint": "默认使用 https://openspeech.bytedance.com。",
+        "default": "https://openspeech.bytedance.com"
+      },
+      "endpoint": {
+        "description": "语音合成接口路径",
+        "type": "string",
+        "hint": "HTTP 一次性合成接口路径。",
+        "default": "/api/v1/tts"
+      },
+      "cluster": {
+        "description": "火山集群",
+        "type": "string",
+        "hint": "常见值 volcano_tts；如果控制台给了其它 cluster，在这里改。",
+        "default": "volcano_tts"
+      },
+      "voice_type": {
+        "description": "音色 ID",
+        "type": "string",
+        "hint": "默认使用你提供的音色 ID。",
+        "default": "S_RaFCxn8Q1"
+      },
+      "encoding": {
+        "description": "音频格式",
+        "type": "string",
+        "hint": "建议 mp3；部分平台可能会自行转换语音格式。",
+        "default": "mp3"
+      },
+      "speed_ratio": {
+        "description": "语速",
+        "type": "float",
+        "hint": "1.0 为正常语速。",
+        "default": 1.0
+      },
+      "volume_ratio": {
+        "description": "音量",
+        "type": "float",
+        "hint": "1.0 为正常音量。",
+        "default": 1.0
+      },
+      "pitch_ratio": {
+        "description": "音调",
+        "type": "float",
+        "hint": "1.0 为正常音调。",
+        "default": 1.0
+      },
+      "max_chars": {
+        "description": "单次最大字符数",
+        "type": "int",
+        "hint": "避免一次合成过长文本。",
+        "default": 300
+      },
+      "timeout": {
+        "description": "请求超时时间",
+        "type": "int",
+        "hint": "单位：秒。",
+        "default": 60
+      },
+      "extra_body": {
+        "description": "语音额外请求体参数",
+        "type": "object",
+        "hint": "用于覆盖火山 TTS 请求体里的字段，例如 app/audio/request 内的细节。",
+        "items": {},
+        "default": {}
+      }
+    }
+  },
   "proactive": {
     "description": "主动状态图",
     "type": "object",

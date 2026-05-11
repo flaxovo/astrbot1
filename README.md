@@ -20,6 +20,8 @@ AstrBot 图片生成插件。用户发送关键词和图片描述后，插件会
 - `/自拍 日常自拍照，窗边自然光，微笑`
 - `/状态图 开启`
 - `/状态图 立即`
+- `/语音 晚点给你看照片`
+- `/tts 今天有点想你`
 - `宝宝让我看看你` -> 机器人追问 `要看照片吗？` -> 回复 `要看`
 - `看看今天的穿搭` -> 机器人追问确认后生成穿搭自拍
 
@@ -39,6 +41,14 @@ AstrBot 图片生成插件。用户发送关键词和图片描述后，插件会
 | `keywords` | 免斜杠关键词列表，默认 `画图`、`绘图`、`生成图片`、`gptimg`、`gpt-img-2`。 |
 | `natural_image_enabled` | 是否启用自然语言文生图触发，默认开启。 |
 | `extra_body` | 额外请求体参数，用于兼容不同服务商。 |
+| `tts.enabled` | 是否启用火山语音合成，默认开启。 |
+| `tts.app_id` | 火山语音合成 App ID，也可用环境变量 `VOLC_TTS_APP_ID`。 |
+| `tts.access_token` | 火山语音合成 Access Token，也可用环境变量 `VOLC_TTS_ACCESS_TOKEN`。 |
+| `tts.secret_key` | 火山 Secret Key 预留字段，当前 HTTP 合成路径不需要。 |
+| `tts.voice_type` | 音色 ID，默认 `S_RaFCxn8Q1`。 |
+| `tts.cluster` | 火山语音集群，默认 `volcano_tts`，如控制台给了其它值可修改。 |
+| `tts.encoding` | 音频格式，默认 `mp3`。 |
+| `tts.speed_ratio` / `tts.volume_ratio` / `tts.pitch_ratio` | 语速、音量、音调，默认 `1.0`。 |
 | `proactive.enabled` | 是否启用主动状态图后台任务，默认关闭。 |
 | `proactive.interval_seconds` | 主动状态图发送间隔，默认 `3600` 秒。 |
 | `proactive.initial_delay_seconds` | 插件启动后多久开始第一次后台检查，默认 `300` 秒。 |
@@ -97,6 +107,15 @@ AstrBot 图片生成插件。用户发送关键词和图片描述后，插件会
 - 用户只是要画普通图片：调用 `mode=text`。
 
 这样用户不需要主动输入 `/自拍` 或 `/gptimg`，自然聊天里也能触发插件能力。
+
+插件还提供 `gpt_img_2_speak`，主 Agent 可以在适合发语音时把一句短回复合成为语音发出。也可以直接用命令：
+
+```text
+/语音 晚点给你看照片
+/tts 今天有点想你
+```
+
+语音合成使用火山 HTTP 一次性合成接口，凭据只应写在 AstrBot 配置或环境变量里，不要提交到 git。
 
 3. 查看或删除参考照：
 

@@ -24,6 +24,11 @@ except Exception:
     MessageChain = None
 
 try:
+    from astrbot.core.message.components import Record
+except Exception:
+    Record = None
+
+try:
     from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 except Exception:
     get_astrbot_data_path = None
@@ -35,6 +40,10 @@ DEFAULT_BASE_URL = "https://api.xbyjs.top"
 DEFAULT_ENDPOINT = "/v1/images/generations"
 DEFAULT_EDIT_ENDPOINT = "/v1/images/edits"
 DEFAULT_MODEL = "gpt-image-2"
+DEFAULT_VOLC_TTS_BASE_URL = "https://openspeech.bytedance.com"
+DEFAULT_VOLC_TTS_ENDPOINT = "/api/v1/tts"
+DEFAULT_VOLC_TTS_CLUSTER = "volcano_tts"
+DEFAULT_VOLC_TTS_VOICE_TYPE = "S_RaFCxn8Q1"
 OLD_PROACTIVE_CAPTION = "给你报备一下我现在的状态。"
 DEFAULT_PROACTIVE_CAPTIONS = [
     "宝宝，我刚刚在{activity}，给你偷偷看一眼。",
@@ -49,7 +58,7 @@ DEFAULT_PROACTIVE_CAPTIONS = [
     PLUGIN_NAME,
     "flaw",
     "通过关键词调用 OpenAI 兼容图片生成接口，根据用户描述生成图片。",
-    "1.0.9",
+    "1.1.0",
 )
 class GptImg2Plugin(Star):
     def __init__(self, context: Context, config: dict[str, Any] | None = None):
@@ -60,6 +69,7 @@ class GptImg2Plugin(Star):
         else:
             self.data_dir = Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME
         self.output_dir = self.data_dir / "generated"
+        self.voice_dir = self.data_dir / "voices"
         self.selfie_ref_dir = self.data_dir / "selfie_refs"
         self.proactive_targets_path = self.data_dir / "proactive_targets.json"
         self._recent_images_by_user: dict[str, tuple[float, list[bytes]]] = {}
@@ -68,6 +78,7 @@ class GptImg2Plugin(Star):
 
     async def initialize(self):
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.voice_dir.mkdir(parents=True, exist_ok=True)
         self.selfie_ref_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         if self._proactive_is_active():
@@ -144,6 +155,13 @@ class GptImg2Plugin(Star):
         async for result in self._handle_proactive_status_command(event, action):
             yield result
 
+    @filter.command("语音", alias=["tts", "说话"])
+    async def tts(self, event: AstrMessageEvent):
+        """使用火山语音合成文本。用法：/语音 晚点给你看照片。"""
+        text = self._extract_command_prompt(event)
+        async for result in self._handle_tts(event, text):
+            yield result
+
     @filter.llm_tool(name="gpt_img_2_generate")
     async def gpt_img_2_generate(
         self,
@@ -211,6 +229,24 @@ class GptImg2Plugin(Star):
             return
         yield event.image_result(image_ref)
 
+    @filter.llm_tool(name="gpt_img_2_speak")
+    async def gpt_img_2_speak(self, event: AstrMessageEvent, text: str):
+        """把一句自然回复合成为语音并发送给用户。
+
+        Args:
+            text(string): 要合成的中文回复。适合短句，不要放很长的整段说明。
+        """
+        text = (text or "").strip()
+        if not text:
+            yield event.plain_result("想让我说什么呀？")
+            return
+        try:
+            audio_path = await self._generate_tts_audio(text)
+        except RuntimeError as exc:
+            yield event.plain_result(str(exc))
+            return
+        yield self._record_result(event, audio_path, text=text)
+
     async def _handle_generation(self, event: AstrMessageEvent, prompt: str):
         event.stop_event()
         prompt = prompt.strip()
@@ -233,6 +269,21 @@ class GptImg2Plugin(Star):
             return
 
         yield event.image_result(image_ref)
+
+    async def _handle_tts(self, event: AstrMessageEvent, text: str):
+        event.stop_event()
+        text = text.strip()
+        if not text:
+            yield event.plain_result("想让我说什么呀？")
+            return
+
+        try:
+            audio_path = await self._generate_tts_audio(text)
+        except RuntimeError as exc:
+            yield event.plain_result(str(exc))
+            return
+
+        yield self._record_result(event, audio_path, text=text)
 
     async def _handle_selfie(self, event: AstrMessageEvent, prompt: str):
         event.stop_event()
@@ -980,6 +1031,159 @@ class GptImg2Plugin(Star):
         chain.file_image(image_path)
         return chain
 
+    def _record_result(self, event: AstrMessageEvent, audio_path: str, text: str = "") -> Any:
+        if Record is None:
+            if text:
+                return event.plain_result(text)
+            return event.plain_result("语音已经合成好了，但当前 AstrBot 环境不支持发送语音组件。")
+
+        result = event.make_result()
+        result.chain.append(Record.fromFileSystem(audio_path, text=text))
+        return result
+
+    async def _generate_tts_audio(self, text: str) -> str:
+        if not self._get_tts_bool("enabled", True):
+            raise RuntimeError("语音合成功能暂时关着。")
+
+        app_id = self._get_tts_str("app_id") or os.getenv("VOLC_TTS_APP_ID", "")
+        access_token = self._get_tts_str("access_token") or os.getenv(
+            "VOLC_TTS_ACCESS_TOKEN", ""
+        )
+        if not app_id or not access_token:
+            raise RuntimeError("我这边还没配好语音接口，等填好火山 App ID 和 Token 再说给你听。")
+
+        text = self._prepare_tts_text(text)
+        try:
+            response = await asyncio.to_thread(
+                self._request_volc_tts,
+                app_id,
+                access_token,
+                text,
+            )
+            audio_bytes = self._audio_bytes_from_tts_response(response)
+        except Exception as exc:
+            logger.exception("volc tts generation failed")
+            raise RuntimeError(self._friendly_tts_error(exc)) from exc
+
+        encoding = self._get_tts_str("encoding", "mp3").lower() or "mp3"
+        ext = "wav" if encoding == "wav" else "mp3"
+        output_path = self.voice_dir / f"{uuid.uuid4().hex}.{ext}"
+        output_path.write_bytes(audio_bytes)
+        return str(output_path)
+
+    def _request_volc_tts(
+        self,
+        app_id: str,
+        access_token: str,
+        text: str,
+    ) -> dict[str, Any]:
+        base_url = self._get_tts_str("base_url", DEFAULT_VOLC_TTS_BASE_URL).rstrip("/")
+        endpoint = self._get_tts_str("endpoint", DEFAULT_VOLC_TTS_ENDPOINT)
+        url = self._build_api_url(base_url, endpoint)
+
+        encoding = self._get_tts_str("encoding", "mp3").lower() or "mp3"
+        payload = {
+            "app": {
+                "appid": app_id,
+                "token": access_token,
+                "cluster": self._get_tts_str("cluster", DEFAULT_VOLC_TTS_CLUSTER),
+            },
+            "user": {
+                "uid": self._get_tts_str("uid", "astrbot_gpt_img_2")
+            },
+            "audio": {
+                "voice_type": self._get_tts_str(
+                    "voice_type", DEFAULT_VOLC_TTS_VOICE_TYPE
+                ),
+                "encoding": encoding,
+                "speed_ratio": self._get_tts_float("speed_ratio", 1.0),
+                "volume_ratio": self._get_tts_float("volume_ratio", 1.0),
+                "pitch_ratio": self._get_tts_float("pitch_ratio", 1.0),
+            },
+            "request": {
+                "reqid": uuid.uuid4().hex,
+                "text": text,
+                "text_type": "plain",
+                "operation": "query",
+            },
+        }
+
+        extra_body = self._get_tts_value("extra_body", {})
+        if isinstance(extra_body, dict):
+            self._deep_update(payload, extra_body)
+
+        request = urllib.request.Request(
+            url=url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer;{access_token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+
+        timeout = self._get_tts_int("timeout", self._get_config_int("timeout", 120))
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(self._format_api_error(exc.code, body)) from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"无法连接语音接口：{exc.reason}") from exc
+
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("语音接口返回了无法解析的 JSON") from exc
+
+        if isinstance(parsed, dict):
+            return parsed
+        raise RuntimeError("语音接口返回格式不正确")
+
+    def _audio_bytes_from_tts_response(self, response: dict[str, Any]) -> bytes:
+        code = response.get("code")
+        if code not in (None, 0, 3000):
+            message = response.get("message") or response.get("msg") or str(response)
+            raise RuntimeError(f"语音接口返回错误：{message}")
+
+        audio_data = (
+            response.get("data")
+            or response.get("audio")
+            or response.get("result", {}).get("data")
+        )
+        if not audio_data:
+            raise RuntimeError("语音接口没有返回音频数据")
+        if isinstance(audio_data, str):
+            return base64.b64decode(audio_data)
+        raise RuntimeError("语音接口音频数据格式不正确")
+
+    def _prepare_tts_text(self, text: str) -> str:
+        text = re.sub(r"\s+", " ", text).strip()
+        max_chars = self._get_tts_int("max_chars", 300)
+        if len(text) > max_chars:
+            text = text[:max_chars].rstrip()
+        return text
+
+    def _friendly_tts_error(self, exc: Exception) -> str:
+        text = str(exc)
+        lowered = text.lower()
+        if "api" in lowered or "token" in lowered or "authorization" in lowered or "401" in text:
+            return "我这边语音接口还没连好，等钥匙配对了再说给你听。"
+        if "timeout" in lowered or "超时" in text:
+            return "刚刚这句话没说出来，像是卡了一下。等会儿我再试试。"
+        if "HTTP 500" in text or "HTTP 502" in text or "HTTP 503" in text:
+            return "这次语音没合出来，接口那边有点不稳。"
+        return "这次没说出来，我等会儿换个方式再试。"
+
+    def _deep_update(self, target: dict[str, Any], source: dict[str, Any]) -> None:
+        for key, value in source.items():
+            if isinstance(value, dict) and isinstance(target.get(key), dict):
+                self._deep_update(target[key], value)
+            else:
+                target[str(key)] = value
+
     def _ensure_proactive_task(self) -> None:
         if self._proactive_task is None or self._proactive_task.done():
             self._proactive_task = asyncio.create_task(self._proactive_loop())
@@ -1634,6 +1838,41 @@ class GptImg2Plugin(Star):
 
     def _get_proactive_bool(self, key: str, default: bool) -> bool:
         value = self._get_proactive_value(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "开启", "是"}
+        return bool(value)
+
+    def _get_tts_config(self) -> dict[str, Any]:
+        value = self.config.get("tts", {})
+        return value if isinstance(value, dict) else {}
+
+    def _get_tts_value(self, key: str, default: Any = None) -> Any:
+        return self._get_tts_config().get(key, default)
+
+    def _get_tts_str(self, key: str, default: str = "") -> str:
+        value = self._get_tts_value(key, default)
+        if value is None:
+            return default
+        return str(value).strip()
+
+    def _get_tts_int(self, key: str, default: int) -> int:
+        value = self._get_tts_value(key, default)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _get_tts_float(self, key: str, default: float) -> float:
+        value = self._get_tts_value(key, default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _get_tts_bool(self, key: str, default: bool) -> bool:
+        value = self._get_tts_value(key, default)
         if isinstance(value, bool):
             return value
         if isinstance(value, str):
