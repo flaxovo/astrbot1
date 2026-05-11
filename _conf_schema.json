@@ -104,7 +104,7 @@
       "caption_templates": {
         "description": "状态图文案模板",
         "type": "list",
-        "hint": "按你的角色性格填写多条自然口吻文案，每次主动状态图随机选一句。留空使用内置亲近随手发图口吻。",
+        "hint": "按你的角色性格填写多条自然口吻文案，每次随机选一句。支持 {activity} 和 {outfit} 占位符。",
         "default": []
       },
       "person_visible": {
@@ -118,6 +118,30 @@
         "type": "bool",
         "hint": "开启后，如果已经设置自拍参考照，主动状态图会优先用参考照生成同一角色的查岗自拍；失败时会回退到普通文生图。",
         "default": true
+      },
+      "daily_outfit_enabled": {
+        "description": "启用今日穿搭",
+        "type": "bool",
+        "hint": "开启后，每天会稳定选择一套今日穿搭，并用于主动状态图和自拍提示，避免同一天衣服来回变化。",
+        "default": true
+      },
+      "daily_outfits": {
+        "description": "今日穿搭候选",
+        "type": "list",
+        "hint": "可填写多套角色常穿搭配。插件每天固定随机选择一套，主动状态图和自拍都会尽量沿用。",
+        "default": []
+      },
+      "schedule_items": {
+        "description": "日程安排",
+        "type": "list",
+        "hint": "按“09:00-11:30 在咖啡店看书”格式填写。当前时间命中日程时，主动状态图会按该日程生成。",
+        "default": []
+      },
+      "random_activities": {
+        "description": "随机状态候选",
+        "type": "list",
+        "hint": "没有命中日程时，从这里随机选择正在做什么；留空则按早上/中午/下午/晚上/深夜使用内置状态。",
+        "default": []
       },
       "prompt_templates": {
         "description": "状态图提示词模板",

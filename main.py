@@ -37,11 +37,11 @@ DEFAULT_EDIT_ENDPOINT = "/v1/images/edits"
 DEFAULT_MODEL = "gpt-image-2"
 OLD_PROACTIVE_CAPTION = "给你报备一下我现在的状态。"
 DEFAULT_PROACTIVE_CAPTIONS = [
-    "宝宝，我这边刚好停了一下，给你偷偷看一眼。",
-    "刚刚在忙这个，突然想起你，就顺手拍给你看。",
-    "不用急着回我，我就是想让你看看我现在在干嘛。",
-    "这一会儿大概是这样，像被你抽查到了一样。",
-    "我没有消失哦，给你看一下我这边的小现场。",
+    "宝宝，我刚刚在{activity}，给你偷偷看一眼。",
+    "刚才忙着{activity}，突然想起你，就顺手拍给你看。",
+    "不用急着回我，我就是想让你看看我现在在{activity}。",
+    "这一会儿在{activity}，像被你抽查到了一样。",
+    "我没有消失哦，刚刚在{activity}，给你看一下我这边的小现场。",
 ]
 
 
@@ -49,7 +49,7 @@ DEFAULT_PROACTIVE_CAPTIONS = [
     PLUGIN_NAME,
     "flaw",
     "通过关键词调用 OpenAI 兼容图片生成接口，根据用户描述生成图片。",
-    "1.0.7",
+    "1.0.8",
 )
 class GptImg2Plugin(Star):
     def __init__(self, context: Context, config: dict[str, Any] | None = None):
@@ -675,16 +675,28 @@ class GptImg2Plugin(Star):
         else:
             candidates = []
 
+        activity = self._select_current_activity()
+        outfit = self._select_today_outfit()
         if not candidates:
             candidates = [
-                "真实生活感查岗自拍：本人坐在桌边，半身或侧脸入镜，桌上有打开的电脑、半杯饮料和随手写下的便签，像刚忙完一小段事情随手拍给亲近的人看，温柔自然，手机随拍感，不要文字。",
-                "真实生活感查岗照片：窗边自然光，本人穿着得体的日常衣服，手臂、肩膀和半张脸自然入镜，旁边有摊开的书、耳机和手机，氛围安静，像在认真做自己的事，手机随拍，不要文字。",
-                "真实生活感查岗自拍：夜晚暖灯下，本人靠在桌前或床边，脸部可以是侧脸或局部，屏幕微亮，旁边有小零食和水杯，像熬夜处理事情时随手给恋人看一眼，真实自然，不要文字。",
-                "真实生活感查岗照片：室内柔和光线，本人的手、腿部、肩膀或镜中半身至少有一处清楚入镜，干净桌面、手边小物和一点生活痕迹，表达“我现在在这里”的感觉，真实手机照片风格，不要文字。",
+                f"真实生活感查岗自拍：本人正在{activity}，像被亲近的人临时问“在干嘛”后随手拍的一张照片，画面自然、不摆拍，手机随拍感，不要文字。",
+                f"真实生活感状态照片：本人正在{activity}，镜头里能看到人物和当前环境的小细节，像认真做自己的事时顺手发给恋人看的照片，真实自然，不要文字。",
+                f"真实生活感查岗照片：当前状态是{activity}，画面有一点生活痕迹和即时感，像刚停下来随手拍给对方看一眼，温柔自然，不要文字。",
+                f"真实生活感自拍：本人正在{activity}，不刻意摆造型，构图像微信里临时发出的近照，真实照片风格，不要文字。",
             ]
 
         base_prompt = random.choice(candidates)
         current_time = time.strftime("%Y-%m-%d %H:%M")
+        base_prompt = (
+            f"{base_prompt}\n"
+            f"当前日程/状态：{activity}。"
+        )
+        if outfit:
+            base_prompt = (
+                f"{base_prompt}\n"
+                f"今日穿搭：{outfit}。今天生成的自拍和状态照都要尽量保持这套穿搭一致，"
+                "除非用户明确要求换衣服。"
+            )
         if self._get_proactive_bool("person_visible", True):
             base_prompt = (
                 f"{base_prompt}\n"
@@ -693,6 +705,127 @@ class GptImg2Plugin(Star):
                 "不要只拍桌面、物品或空房间。人物穿着日常得体。"
             )
         return f"{base_prompt}\n当前时间参考：{current_time}。画面不要出现可读文字、水印或二维码。"
+
+    def _select_current_activity(self) -> str:
+        scheduled = self._activity_from_schedule()
+        if scheduled:
+            return scheduled
+
+        configured = self._get_proactive_value("random_activities", [])
+        if isinstance(configured, list):
+            activities = [str(item).strip() for item in configured if str(item).strip()]
+        else:
+            activities = []
+
+        if not activities:
+            hour = int(time.strftime("%H"))
+            if 6 <= hour < 11:
+                activities = [
+                    "慢慢收拾早晨的东西，准备开始今天",
+                    "靠窗喝点东西，顺便看消息",
+                    "整理今天要做的事和随身小物",
+                ]
+            elif 11 <= hour < 14:
+                activities = [
+                    "准备吃点东西，顺便休息一会儿",
+                    "在外面走走，找个地方坐一下",
+                    "刚忙完一段事情，准备吃午饭",
+                ]
+            elif 14 <= hour < 18:
+                activities = [
+                    "认真处理下午的事情",
+                    "在安静的地方看东西或写东西",
+                    "出门办点小事，顺手停下来回消息",
+                ]
+            elif 18 <= hour < 22:
+                activities = [
+                    "吃完东西后慢慢放松",
+                    "在房间里整理小物和今天的东西",
+                    "开着暖灯休息，顺便看消息",
+                ]
+            else:
+                activities = [
+                    "夜里还没睡，安静地做一点自己的事",
+                    "靠在床边或桌前放空一会儿",
+                    "在暖灯下收尾今天的小事情",
+                ]
+
+        seed = f"{time.strftime('%Y-%m-%d-%H')}:activity"
+        return random.Random(seed).choice(activities)
+
+    def _activity_from_schedule(self) -> str:
+        items = self._get_proactive_value("schedule_items", [])
+        if not isinstance(items, list):
+            return ""
+
+        now_minutes = int(time.strftime("%H")) * 60 + int(time.strftime("%M"))
+        for item in items:
+            activity = self._parse_schedule_item(item, now_minutes)
+            if activity:
+                return activity
+        return ""
+
+    def _parse_schedule_item(self, item: Any, now_minutes: int) -> str:
+        if isinstance(item, dict):
+            start = str(item.get("start", "")).strip()
+            end = str(item.get("end", "")).strip()
+            activity = str(item.get("activity", "") or item.get("text", "")).strip()
+            if self._time_range_contains(start, end, now_minutes):
+                return activity
+            return ""
+
+        text = str(item).strip()
+        match = re.match(
+            r"^\s*(\d{1,2}:\d{2})\s*[-~到至]\s*(\d{1,2}:\d{2})\s*[:：,，\s]*(.+)$",
+            text,
+        )
+        if not match:
+            return ""
+        start, end, activity = match.groups()
+        if self._time_range_contains(start, end, now_minutes):
+            return activity.strip()
+        return ""
+
+    def _time_range_contains(self, start: str, end: str, now_minutes: int) -> bool:
+        start_minutes = self._parse_clock_minutes(start)
+        end_minutes = self._parse_clock_minutes(end)
+        if start_minutes is None or end_minutes is None:
+            return False
+        if start_minutes <= end_minutes:
+            return start_minutes <= now_minutes < end_minutes
+        return now_minutes >= start_minutes or now_minutes < end_minutes
+
+    def _parse_clock_minutes(self, value: str) -> int | None:
+        match = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", value)
+        if not match:
+            return None
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return None
+        return hour * 60 + minute
+
+    def _select_today_outfit(self) -> str:
+        if not self._get_proactive_bool("daily_outfit_enabled", True):
+            return ""
+
+        configured = self._get_proactive_value("daily_outfits", [])
+        if isinstance(configured, list):
+            outfits = [str(item).strip() for item in configured if str(item).strip()]
+        else:
+            outfits = []
+
+        if not outfits:
+            outfits = [
+                "柔软浅色针织开衫，里面搭干净的浅色内搭，下身是高腰半裙或宽松长裤，整体温柔日常",
+                "短款外套配简单内搭和浅色牛仔下装，头发自然整理，清爽又有生活感",
+                "宽松卫衣或针织上衣配休闲短裙/长裤，袜子和鞋子干净，像今天随手穿得很舒服",
+                "奶油色或浅粉色上衣配浅蓝牛仔下装，配一个小发夹或简单耳饰，甜一点但不夸张",
+                "柔和色系衬衫或开衫，搭配日常通勤感下装，整个人看起来干净、亲近、自然",
+            ]
+
+        seed = f"{time.strftime('%Y-%m-%d')}:outfit"
+        return random.Random(seed).choice(outfits)
 
     def _build_proactive_caption(self) -> str:
         templates = self._get_proactive_value("caption_templates", [])
@@ -708,7 +841,11 @@ class GptImg2Plugin(Star):
         if not candidates:
             candidates = DEFAULT_PROACTIVE_CAPTIONS
 
-        return random.choice(candidates)
+        caption = random.choice(candidates)
+        return (
+            caption.replace("{activity}", self._select_current_activity())
+            .replace("{outfit}", self._select_today_outfit() or "今天这身")
+        )
 
     async def _ensure_local_image_ref(self, image_ref: str) -> str:
         if not image_ref.startswith(("http://", "https://")):
@@ -1176,6 +1313,13 @@ class GptImg2Plugin(Star):
                 "请明显区别于参考图：换一个新背景、新姿势、新构图和新镜头距离。"
             )
         user_prompt = f"{user_prompt}\n{variety}"
+        outfit = self._select_today_outfit()
+        if outfit:
+            user_prompt = (
+                f"{user_prompt}\n"
+                f"今日穿搭：{outfit}。今天的自拍、查岗照和状态照都尽量保持这套穿搭一致，"
+                "除非用户明确要求换衣服或换风格。"
+            )
         if extra_refs > 0:
             return f"{prefix}\n\n用户要求：{user_prompt}\n额外参考图数量：{extra_refs}"
         return f"{prefix}\n\n用户要求：{user_prompt}"

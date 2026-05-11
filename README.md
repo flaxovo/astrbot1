@@ -47,6 +47,10 @@ AstrBot 图片生成插件。用户发送关键词和图片描述后，插件会
 | `proactive.caption_templates` | 主动状态图文案模板，可按角色性格填写多条自然口吻。 |
 | `proactive.person_visible` | 状态图要求人物或身体局部入镜，默认开启。 |
 | `proactive.use_selfie_reference` | 有自拍参考照时，主动状态图优先生成同一角色的查岗自拍，默认开启。 |
+| `proactive.daily_outfit_enabled` | 每天稳定选择一套今日穿搭，并用于主动状态图和自拍。 |
+| `proactive.daily_outfits` | 今日穿搭候选列表。 |
+| `proactive.schedule_items` | 日程安排，格式如 `09:00-11:30 在咖啡店看书`。 |
+| `proactive.random_activities` | 没命中日程时的随机状态候选。 |
 | `proactive.prompt_templates` | 状态图提示词模板列表，留空使用内置有人入镜的生活感查岗模板。 |
 | `selfie.enabled` | 是否启用自拍参考照模式，默认开启。 |
 | `selfie.reference_images` | WebUI 上传的自拍参考图；不填时可用命令保存。 |
@@ -137,9 +141,11 @@ proactive.enabled = true
 
 - 主动发送需要 AstrBot 的 `unified_msg_origin`，所以目标聊天至少要执行一次 `/状态图 开启`。
 - 默认每 1 小时生成一张“正在做什么/生活状态报备”的图片，并要求看到人或身体局部。
+- 如果配置了 `schedule_items`，当前时间命中日程时会按日程生成；没命中时会按时间段或 `random_activities` 随机生成正在做的事。
+- `daily_outfits` 会每天稳定选一套“今日穿搭”，主动状态图和自拍都会尽量沿用同一套。
 - 如果已经设置自拍参考照，主动状态图会优先用参考照生成同一角色的查岗自拍；失败时回退到普通图片生成。
 - 默认附带文字会随机使用更自然的角色口吻，不再固定说“给你报备一下我现在的状态”。
-- 想完全贴合人设时，可以在 `caption_templates` 里写多条角色会说的话。
+- 想完全贴合人设时，可以在 `caption_templates` 里写多条角色会说的话，支持 `{activity}` 和 `{outfit}` 占位符。
 - `prompt_templates` 可自定义，比如“正在看书”“在桌前工作”“夜里整理东西”等不同状态。
 
 ## 说明
