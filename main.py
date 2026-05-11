@@ -49,7 +49,7 @@ DEFAULT_PROACTIVE_CAPTIONS = [
     PLUGIN_NAME,
     "flaw",
     "通过关键词调用 OpenAI 兼容图片生成接口，根据用户描述生成图片。",
-    "1.0.5",
+    "1.0.6",
 )
 class GptImg2Plugin(Star):
     def __init__(self, context: Context, config: dict[str, Any] | None = None):
@@ -343,14 +343,17 @@ class GptImg2Plugin(Star):
         if normalized in {"立即", "现在", "测试", "发一张", "马上"}:
             try:
                 image_ref = await self._generate_proactive_status_image()
+                local_image = await self._ensure_local_image_ref(image_ref)
             except Exception as exc:
                 logger.exception("proactive status image immediate generation failed")
                 yield event.plain_result(self._friendly_generation_error(exc, mode="image"))
                 return
             caption = self._build_proactive_caption()
+            result = event.make_result()
             if caption:
-                yield event.plain_result(caption)
-            yield event.image_result(image_ref)
+                result.message(caption)
+            result.file_image(local_image)
+            yield result
             return
 
         if normalized in {"状态", "查看", "status"}:
