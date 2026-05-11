@@ -138,7 +138,6 @@ class GptImg2Plugin(Star):
         resolved_mode = self._resolve_llm_tool_mode(prompt, mode, ask_first)
 
         if resolved_mode == "ask_selfie":
-            event.stop_event()
             pending_prompt = prompt or self._default_selfie_prompt()
             self._set_pending_selfie(event, pending_prompt)
             yield event.plain_result(
@@ -147,14 +146,22 @@ class GptImg2Plugin(Star):
             return
 
         if resolved_mode == "selfie":
-            async for result in self._handle_selfie(
-                event, prompt or self._default_selfie_prompt()
-            ):
-                yield result
+            try:
+                image_ref = await self._generate_selfie_for_tool(
+                    event, prompt or self._default_selfie_prompt()
+                )
+            except RuntimeError as exc:
+                yield event.plain_result(str(exc))
+                return
+            yield event.image_result(image_ref)
             return
 
-        async for result in self._handle_generation(event, prompt):
-            yield result
+        try:
+            image_ref = await self._generate_image_for_tool(prompt)
+        except RuntimeError as exc:
+            yield event.plain_result(str(exc))
+            return
+        yield event.image_result(image_ref)
 
     async def _handle_generation(self, event: AstrMessageEvent, prompt: str):
         event.stop_event()
@@ -199,6 +206,41 @@ class GptImg2Plugin(Star):
             return
 
         yield event.image_result(image_ref)
+
+    async def _generate_image_for_tool(self, prompt: str) -> str:
+        prompt = prompt.strip()
+        if not prompt:
+            raise RuntimeError("缺少图片描述")
+
+        api_key = self._get_config_str("api_key") or os.getenv("OPENAI_API_KEY", "")
+        if not api_key:
+            raise RuntimeError("api_key 未配置")
+
+        try:
+            return await self._generate_image(api_key, prompt)
+        except Exception as exc:
+            logger.exception("gpt-img-2 llm tool image generation failed")
+            raise RuntimeError(
+                self._friendly_generation_error(exc, mode="image")
+            ) from exc
+
+    async def _generate_selfie_for_tool(
+        self, event: AstrMessageEvent, prompt: str
+    ) -> str:
+        if not self._get_selfie_bool("enabled", True):
+            raise RuntimeError("自拍参考照功能已关闭")
+
+        api_key = self._get_config_str("api_key") or os.getenv("OPENAI_API_KEY", "")
+        if not api_key:
+            raise RuntimeError("api_key 未配置")
+
+        try:
+            return await self._generate_selfie(api_key, event, prompt)
+        except Exception as exc:
+            logger.exception("gpt-img-2 llm tool selfie generation failed")
+            raise RuntimeError(
+                self._friendly_generation_error(exc, mode="selfie")
+            ) from exc
 
     async def _handle_selfie_reference(self, event: AstrMessageEvent, action: str):
         event.stop_event()
