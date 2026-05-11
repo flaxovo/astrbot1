@@ -103,16 +103,34 @@
         "hint": "默认使用 https://openspeech.bytedance.com。",
         "default": "https://openspeech.bytedance.com"
       },
-      "endpoint": {
-        "description": "语音合成接口路径",
+      "api_version": {
+        "description": "火山接口版本",
         "type": "string",
-        "hint": "HTTP 一次性合成接口路径。",
+        "hint": "默认 v3。S_ 开头的声音复刻音色建议使用 v3；旧版音色可改为 v1。",
+        "default": "v3"
+      },
+      "endpoint": {
+        "description": "V1 语音合成接口路径",
+        "type": "string",
+        "hint": "api_version=v1 时使用。",
         "default": "/api/v1/tts"
+      },
+      "v3_endpoint": {
+        "description": "V3 语音合成接口路径",
+        "type": "string",
+        "hint": "api_version=v3 时使用。",
+        "default": "/api/v3/tts/unidirectional"
+      },
+      "resource_id": {
+        "description": "V3 Resource ID",
+        "type": "string",
+        "hint": "S_ 开头的声音复刻音色通常使用 seed-icl-2.0；如控制台另有 Resource ID，在这里修改。",
+        "default": "seed-icl-2.0"
       },
       "cluster": {
         "description": "火山集群",
         "type": "string",
-        "hint": "常见值 volcano_tts；如果控制台给了其它 cluster，在这里改。",
+        "hint": "api_version=v1 时使用。常见值 volcano_tts；如果控制台给了其它 cluster，在这里改。",
         "default": "volcano_tts"
       },
       "voice_type": {
@@ -126,6 +144,12 @@
         "type": "string",
         "hint": "建议 mp3；部分平台可能会自行转换语音格式。",
         "default": "mp3"
+      },
+      "sample_rate": {
+        "description": "采样率",
+        "type": "int",
+        "hint": "V3 音频采样率，默认 24000。",
+        "default": 24000
       },
       "speed_ratio": {
         "description": "语速",

@@ -42,8 +42,10 @@ DEFAULT_EDIT_ENDPOINT = "/v1/images/edits"
 DEFAULT_MODEL = "gpt-image-2"
 DEFAULT_VOLC_TTS_BASE_URL = "https://openspeech.bytedance.com"
 DEFAULT_VOLC_TTS_ENDPOINT = "/api/v1/tts"
+DEFAULT_VOLC_TTS_V3_ENDPOINT = "/api/v3/tts/unidirectional"
 DEFAULT_VOLC_TTS_CLUSTER = "volcano_tts"
 DEFAULT_VOLC_TTS_APP_ID = "9694280449"
+DEFAULT_VOLC_TTS_RESOURCE_ID = "seed-icl-2.0"
 DEFAULT_VOLC_TTS_VOICE_TYPE = "S_RaFCxn8Q1"
 OLD_PROACTIVE_CAPTION = "给你报备一下我现在的状态。"
 DEFAULT_PROACTIVE_CAPTIONS = [
@@ -1080,6 +1082,17 @@ class GptImg2Plugin(Star):
         access_token: str,
         text: str,
     ) -> dict[str, Any]:
+        api_version = self._get_tts_str("api_version", "v3").lower()
+        if api_version in {"v3", "3", "http_v3", "unidirectional"}:
+            return self._request_volc_tts_v3(app_id, access_token, text)
+        return self._request_volc_tts_v1(app_id, access_token, text)
+
+    def _request_volc_tts_v1(
+        self,
+        app_id: str,
+        access_token: str,
+        text: str,
+    ) -> dict[str, Any]:
         base_url = self._get_tts_str("base_url", DEFAULT_VOLC_TTS_BASE_URL).rstrip("/")
         endpoint = self._get_tts_str("endpoint", DEFAULT_VOLC_TTS_ENDPOINT)
         url = self._build_api_url(base_url, endpoint)
@@ -1145,6 +1158,104 @@ class GptImg2Plugin(Star):
             return parsed
         raise RuntimeError("语音接口返回格式不正确")
 
+    def _request_volc_tts_v3(
+        self,
+        app_id: str,
+        access_token: str,
+        text: str,
+    ) -> dict[str, Any]:
+        base_url = self._get_tts_str("base_url", DEFAULT_VOLC_TTS_BASE_URL).rstrip("/")
+        endpoint = self._get_tts_str("v3_endpoint", DEFAULT_VOLC_TTS_V3_ENDPOINT)
+        url = self._build_api_url(base_url, endpoint)
+        encoding = self._get_tts_str("encoding", "mp3").lower() or "mp3"
+        voice_type = self._get_tts_str("voice_type", DEFAULT_VOLC_TTS_VOICE_TYPE)
+
+        payload = {
+            "req_params": {
+                "text": text,
+                "speaker": voice_type,
+                "audio_params": {
+                    "format": encoding,
+                    "sample_rate": self._get_tts_int("sample_rate", 24000),
+                },
+            }
+        }
+
+        extra_body = self._get_tts_value("extra_body", {})
+        if isinstance(extra_body, dict):
+            self._deep_update(payload, extra_body)
+
+        resource_id = self._get_tts_str("resource_id", DEFAULT_VOLC_TTS_RESOURCE_ID)
+        request = urllib.request.Request(
+            url=url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "X-Api-App-Id": app_id,
+                "X-Api-Access-Key": access_token,
+                "X-Api-Resource-Id": resource_id,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+
+        timeout = self._get_tts_int("timeout", self._get_config_int("timeout", 120))
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(self._format_api_error(exc.code, body)) from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"无法连接语音接口：{exc.reason}") from exc
+
+        return self._parse_volc_tts_v3_body(body)
+
+    def _parse_volc_tts_v3_body(self, body: str) -> dict[str, Any]:
+        audio_parts: list[bytes] = []
+        last_message = ""
+
+        for line in body.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("data:"):
+                line = line[5:].strip()
+            if line == "[DONE]":
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+
+            code = parsed.get("code")
+            if code not in (None, 0, 3000):
+                last_message = parsed.get("message") or parsed.get("msg") or str(parsed)
+                continue
+
+            data = parsed.get("data")
+            if isinstance(data, str) and data:
+                audio_parts.append(base64.b64decode(data))
+            elif isinstance(data, dict):
+                audio = data.get("audio") or data.get("data")
+                if isinstance(audio, str) and audio:
+                    audio_parts.append(base64.b64decode(audio))
+
+        if audio_parts:
+            return {"code": 3000, "data": base64.b64encode(b"".join(audio_parts)).decode()}
+
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError as exc:
+            if last_message:
+                raise RuntimeError(f"语音接口返回错误：{last_message}") from exc
+            raise RuntimeError("语音接口没有返回音频数据") from exc
+        if isinstance(parsed, dict):
+            return parsed
+        raise RuntimeError("语音接口返回格式不正确")
+
     def _audio_bytes_from_tts_response(self, response: dict[str, Any]) -> bytes:
         code = response.get("code")
         if code not in (None, 0, 3000):
@@ -1174,6 +1285,8 @@ class GptImg2Plugin(Star):
         lowered = text.lower()
         if "api" in lowered or "token" in lowered or "authorization" in lowered or "401" in text:
             return "我这边语音接口还没连好，等钥匙配对了再说给你听。"
+        if "3031" in text or "Init Engine Instance failed" in text:
+            return "这次没说出来，音色和接口像是没对上。我换一条新的语音通道再试。"
         if "timeout" in lowered or "超时" in text:
             return "刚刚这句话没说出来，像是卡了一下。等会儿我再试试。"
         if "HTTP 500" in text or "HTTP 502" in text or "HTTP 503" in text:

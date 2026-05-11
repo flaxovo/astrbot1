@@ -46,8 +46,11 @@ AstrBot 图片生成插件。用户发送关键词和图片描述后，插件会
 | `tts.access_token` | 火山语音合成 Access Token，也可用环境变量 `VOLC_TTS_ACCESS_TOKEN`，不要提交到 git。 |
 | `tts.secret_key` | 火山 Secret Key 预留字段，当前 HTTP 合成路径不需要；如填写也不要提交到 git。 |
 | `tts.voice_type` | 音色 ID，默认 `S_RaFCxn8Q1`。 |
-| `tts.cluster` | 火山语音集群，默认 `volcano_tts`，如控制台给了其它值可修改。 |
+| `tts.api_version` | 火山接口版本，默认 `v3`。`S_` 开头的声音复刻音色建议使用 v3。 |
+| `tts.resource_id` | V3 Resource ID，默认 `seed-icl-2.0`。 |
+| `tts.cluster` | V1 集群，默认 `volcano_tts`，仅 `api_version=v1` 时使用。 |
 | `tts.encoding` | 音频格式，默认 `mp3`。 |
+| `tts.sample_rate` | V3 采样率，默认 `24000`。 |
 | `tts.speed_ratio` / `tts.volume_ratio` / `tts.pitch_ratio` | 语速、音量、音调，默认 `1.0`。 |
 | `proactive.enabled` | 是否启用主动状态图后台任务，默认关闭。 |
 | `proactive.interval_seconds` | 主动状态图发送间隔，默认 `3600` 秒。 |
@@ -115,7 +118,7 @@ AstrBot 图片生成插件。用户发送关键词和图片描述后，插件会
 /tts 今天有点想你
 ```
 
-语音合成使用火山 HTTP 一次性合成接口，凭据只应写在 AstrBot 配置或环境变量里，不要提交到 git。
+语音合成默认使用火山 V3 HTTP 单向接口。`S_` 开头的声音复刻音色通常需要 `resource_id=seed-icl-2.0`；如果你使用旧版音色，可以把 `tts.api_version` 改成 `v1` 并按控制台填写 `cluster`。凭据只应写在 AstrBot 配置或环境变量里，不要提交到 git。
 
 3. 查看或删除参考照：
 
